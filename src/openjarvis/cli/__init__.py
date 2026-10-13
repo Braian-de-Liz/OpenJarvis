@@ -8,6 +8,7 @@ import click
 
 import openjarvis
 from openjarvis.cli.scan_cmd import scan
+from openjarvis.cli.show_cmd import show
 
 
 def _invoked_command(argv: list[str]) -> str:
@@ -187,6 +188,7 @@ if not _DATA_BOUNDARY_BOOTSTRAP:
         )
     cli.add_command(self_update, "self-update")
     cli.add_command(bootstrap_cmd, "_bootstrap")
+    cli.add_command(show, "show")
 
     # Gateway CLI commands (lazy import to avoid pulling starlette)
     try:

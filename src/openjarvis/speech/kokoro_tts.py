@@ -86,11 +86,28 @@ class KokoroTTSBackend(TTSBackend):
                 self._pipelines.move_to_end(lang_code)
                 return pipeline
             try:
+                from kokoro import pipeline as kokoro_pipeline
                 from kokoro import KPipeline
             except ImportError as exc:
                 raise RuntimeError(
                     "kokoro package not installed. Install with: pip install kokoro"
                 ) from exc
+            # Fix 1: kokoro maps "p" -> "pt-br" but espeak-ng only supports "pt"
+            # Monkey-patch LANG_CODES before creating pipeline
+            if hasattr(kokoro_pipeline, "LANG_CODES"):
+                kokoro_pipeline.LANG_CODES["p"] = "pt"
+            # Fix 2: misaki.espeak sets espeak-ng data path to espeakng_loader's path
+            # which lacks Portuguese dict. Reset to system espeak-ng data path.
+            try:
+                import espeakng_loader
+                import phonemizer.backend.espeak.wrapper as espeak_wrapper
+                import phonemizer.backend.espeak.espeak as espeak
+                system_data_path = r"C:\Program Files\eSpeak NG\espeak-ng-data"
+                espeak_wrapper.EspeakWrapper.set_data_path(system_data_path)
+                espeak.EspeakWrapper.set_library(espeakng_loader.get_library_path())
+                espeak.EspeakWrapper.set_data_path(system_data_path)
+            except Exception:
+                pass  # Best effort
             try:
                 # KModel is language-blind and is by far the heaviest part of
                 # Kokoro. Reuse one model across every language pipeline.

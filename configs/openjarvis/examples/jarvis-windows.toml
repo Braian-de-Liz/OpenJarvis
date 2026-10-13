@@ -1,0 +1,37 @@
+# JARVIS Windows Agent - Full PC Control
+# Copy to ~/.openjarvis/config.toml
+
+[engine]
+default = "ollama"
+
+[intelligence]
+default_model = "nvidia/nemotron-3-ultra"
+fallback_model = "nemotron-3-ultra"
+preferred_engine = "ollama"
+provider = "local"
+temperature = 0.1
+max_tokens = 4096
+top_p = 0.9
+
+[agent]
+default_agent = "orchestrator"
+max_turns = 15
+tools = "mouse,keyboard,window,volume,brightness,power,media_keys,process_list,process_kill,process_info,service,screenshot,screen_ocr,screen_region,clipboard_read,clipboard_write,clipboard_history,file_watch,file_watch_list,registry_read,registry_write,registry_search,audio_device_list,audio_device_set_default,app_volume,microphone,file_read,file_write,shell_exec,code_interpreter,web_search,think,calculator"
+objective = "Control Windows PC via natural language with safety confirmations"
+system_prompt_path = "prompts/personas/jarvis_windows.md"
+context_from_memory = true
+
+[tools]
+enabled = ""
+
+[security]
+confirm_destructive = true
+
+[telemetry]
+enabled = true
+gpu_metrics = true
+
+[server]
+host = "127.0.0.1"
+port = 8000
+agent = "orchestrator"

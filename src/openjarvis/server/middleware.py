@@ -52,9 +52,13 @@ def create_security_middleware() -> Any:
             )
             # media-src blob: lets the UI play synthesized speech, which arrives
             # as a blob URL; default-src alone refused it.
+            # font-src data: allows base64-encoded WOFF2 fonts from Vite build.
+            # img-src data: allows base64-encoded SVG images (e.g., noise backgrounds).
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
-                "media-src 'self' blob:"
+                "media-src 'self' blob:; "
+                "font-src 'self' data:; "
+                "img-src 'self' data:"
             )
             return response
 
@@ -70,6 +74,9 @@ SECURITY_HEADERS = {
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
     "Content-Security-Policy": (
-        "default-src 'self' 'unsafe-inline' 'unsafe-eval'; media-src 'self' blob:"
+        "default-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "media-src 'self' blob:; "
+        "font-src 'self' data:; "
+        "img-src 'self' data:"
     ),
 }

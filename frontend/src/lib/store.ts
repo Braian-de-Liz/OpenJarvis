@@ -120,8 +120,8 @@ function loadSettings(): Settings {
     defaultAgent: '',
     temperature: 0.7,
     maxTokens: 4096,
-    speechEnabled: false,
-    voiceOutputEnabled: false,
+    speechEnabled: true,
+    voiceOutputEnabled: true,
     voiceAutoplay: false,
   };
   try {

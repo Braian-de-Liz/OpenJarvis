@@ -1,0 +1,4 @@
+🔊 jarvis-show — Ativação por palmas
+  Threshold: 1500  |  Mic: default  |  Janela: 1.0s
+Ouvindo microfone... (threshold=1500, device=default)
+Bata duas palmas seguidas para ativar.
