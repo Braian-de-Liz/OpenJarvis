@@ -8,6 +8,7 @@ import { checkHealth } from '../lib/api';
 
 export function Layout() {
   const sidebarOpen = useAppStore((s) => s.sidebarOpen);
+  const hudTheme = useAppStore((s) => s.settings.theme) === 'jarvis';
   const [apiReachable, setApiReachable] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -26,6 +27,15 @@ export function Layout() {
 
   return (
     <div className="flex flex-col h-full w-full overflow-hidden relative" style={{ paddingTop: '3px' }}>
+      {hudTheme && (
+        // Same background stack as the JARVIS HUD (glow, grid, scanlines, vignette).
+        <>
+          <div className="jarvis-bg fixed inset-0 pointer-events-none z-0" aria-hidden="true" />
+          <div className="jarvis-grid-bg fixed inset-0 pointer-events-none z-0" aria-hidden="true" />
+          <div className="jarvis-scanlines fixed inset-0 pointer-events-none z-0" aria-hidden="true" />
+          <div className="jarvis-vignette fixed inset-0 pointer-events-none z-0" aria-hidden="true" />
+        </>
+      )}
       <div className="hud-backdrop" aria-hidden="true" />
       <SystemPulse apiReachable={apiReachable} />
       <ApprovalBell />

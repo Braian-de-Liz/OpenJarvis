@@ -8,6 +8,7 @@ import { shouldAutoplayFinishedReply, useTtsStore } from '../../lib/tts';
 import { stripThinkTags } from '../../lib/message-text';
 import { Sparkles, PanelRightOpen, PanelRightClose, Database, MessageSquare, X } from 'lucide-react';
 import { listConnectors } from '../../lib/connectors-api';
+import { ChatHudBar } from '../Jarvis/ChatHudBar';
 
 function getGreeting(): string {
   const hour = new Date().getHours();
@@ -131,11 +132,13 @@ export function ChatArea() {
   const isEmpty = messages.length === 0 && !isCurrentChatStreaming;
 
   const PanelIcon = systemPanelOpen ? PanelRightClose : PanelRightOpen;
+  const hudTheme = useAppStore((s) => s.settings.theme) === 'jarvis';
 
   return (
     <div className="flex flex-col h-full">
       {/* Toggle bar */}
-      <div className="flex items-center justify-end px-3 py-1.5 shrink-0">
+      <div className={`flex items-center ${hudTheme ? 'justify-between gap-3 px-4 py-2.5 chat-hud-bar' : 'justify-end px-3 py-1.5'} shrink-0`}>
+        {hudTheme && <ChatHudBar />}
         <button
           onClick={toggleSystemPanel}
           className="p-1.5 rounded-md transition-colors cursor-pointer"

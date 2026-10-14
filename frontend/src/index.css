@@ -1569,27 +1569,127 @@
   --sidebar-ring: #22d3ee;
 }
 
+/* HUD building blocks (.jarvis-pill, .jarvis-bg, ...) work outside the HUD page */
+:root.jarvis {
+  --jv-cyan: 34, 211, 238;
+  --jv-purple: 168, 85, 247;
+  --jv-surface: rgba(6, 12, 22, 0.78);
+  --jv-border: rgba(34, 211, 238, 0.16);
+  --jv-border-strong: rgba(34, 211, 238, 0.4);
+  --jv-font: var(--font-hud);
+  --jv-font-display: var(--font-display);
+}
+
+/* Corner brackets, like the HUD panels */
+:root.jarvis .hud-frame { position: relative; }
+:root.jarvis .hud-frame::after {
+  --c: rgba(34, 211, 238, 0.6);
+  --s: 11px;
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) top left / 2px var(--s),
+    linear-gradient(var(--c), var(--c)) top right / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) top right / 2px var(--s),
+    linear-gradient(var(--c), var(--c)) bottom left / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) bottom left / 2px var(--s),
+    linear-gradient(var(--c), var(--c)) bottom right / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) bottom right / 2px var(--s);
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 0 3px rgba(34, 211, 238, 0.55));
+}
+
+/* Chat header: HUD topbar */
+:root.jarvis .chat-hud-bar {
+  border-bottom: 1px solid rgba(34, 211, 238, 0.1);
+  background: linear-gradient(180deg, rgba(3, 7, 13, 0.85), rgba(3, 7, 13, 0.4));
+  backdrop-filter: blur(8px);
+}
+
 /* Messages: the same voices as the HUD log (amber you, cyan JARVIS) */
 :root.jarvis .chat-bubble-user {
-  border: 1px solid rgba(251, 191, 36, 0.28);
-  border-radius: 12px 12px 3px 12px !important;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+  border-radius: 10px 10px 3px 10px !important;
   box-shadow: 0 0 24px -14px rgba(251, 191, 36, 0.6);
 }
+:root.jarvis .chat-bubble-user::before {
+  content: 'VOCÊ';
+  display: block;
+  margin-bottom: 2px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  color: rgba(251, 191, 36, 0.8);
+}
+/* JARVIS replies as HUD panels: framed, titled, with corner brackets */
 :root.jarvis .chat-bubble-assistant {
   position: relative;
-  padding-left: 14px;
-  border-left: 2px solid rgba(34, 211, 238, 0.35);
+  padding: 12px 16px 10px;
+  border: 1px solid rgba(34, 211, 238, 0.16);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(6, 12, 22, 0.88), rgba(6, 12, 22, 0.7));
+  box-shadow: 0 0 40px -18px rgba(34, 211, 238, 0.35), inset 0 1px 0 rgba(34, 211, 238, 0.06);
 }
 :root.jarvis .chat-bubble-assistant::before {
   content: 'JARVIS';
-  display: block;
-  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -2px -16px 10px;
+  padding: 0 16px 8px;
+  border-bottom: 1px solid rgba(34, 211, 238, 0.1);
   font-family: var(--font-display);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.3em;
-  color: rgba(34, 211, 238, 0.85);
+  letter-spacing: 0.32em;
+  color: #a5f3fc;
+  text-shadow: 0 0 10px rgba(34, 211, 238, 0.5);
 }
+:root.jarvis .chat-bubble-assistant::after {
+  --c: rgba(34, 211, 238, 0.6);
+  --s: 12px;
+  content: '';
+  position: absolute;
+  inset: -1px;
+  pointer-events: none;
+  background:
+    linear-gradient(var(--c), var(--c)) top left / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) top left / 2px var(--s),
+    linear-gradient(var(--c), var(--c)) top right / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) top right / 2px var(--s),
+    linear-gradient(var(--c), var(--c)) bottom left / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) bottom left / 2px var(--s),
+    linear-gradient(var(--c), var(--c)) bottom right / var(--s) 2px,
+    linear-gradient(var(--c), var(--c)) bottom right / 2px var(--s);
+  background-repeat: no-repeat;
+  filter: drop-shadow(0 0 3px rgba(34, 211, 238, 0.55));
+}
+
+/* Sidebar: HUD side panel */
+:root.jarvis .app-sidebar {
+  border-right-color: rgba(34, 211, 238, 0.16) !important;
+  box-shadow: 1px 0 30px -12px rgba(34, 211, 238, 0.25);
+}
+:root.jarvis .app-nav-item {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+/* Panel titles in the HUD voice */
+:root.jarvis .hud-title,
+:root.jarvis .hud-heading {
+  font-family: var(--font-display);
+  letter-spacing: 0.28em;
+  color: rgba(34, 211, 238, 0.8) !important;
+}
+:root.jarvis .hud-title { font-size: 12px; color: #a5f3fc !important; text-shadow: 0 0 10px rgba(34, 211, 238, 0.45); }
 :root.jarvis .prose {
   font-size: 13.5px;
   line-height: 1.65;
@@ -1607,7 +1707,7 @@
 
 /* Composer: HUD input glow */
 :root.jarvis .chat-composer {
-  border-radius: 9999px !important;
+  border-radius: 12px !important;
   box-shadow: 0 0 30px -12px rgba(34, 211, 238, 0.35) !important;
   transition: border-color 0.25s, box-shadow 0.25s;
 }

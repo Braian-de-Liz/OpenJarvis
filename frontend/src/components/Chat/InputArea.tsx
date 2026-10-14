@@ -596,7 +596,7 @@ export function InputArea() {
         )}
       </div>
       <div
-        className="chat-composer flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow"
+        className="chat-composer hud-frame flex items-center gap-2 rounded-2xl px-4 py-3 transition-shadow"
         style={{
           background: 'var(--color-input-bg)',
           border: '1px solid var(--color-input-border)',
