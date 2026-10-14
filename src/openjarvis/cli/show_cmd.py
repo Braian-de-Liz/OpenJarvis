@@ -10,30 +10,65 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import Optional
+from typing import IO, Optional
 
 import click
 from rich.console import Console
 
 console = Console(stderr=True)
 
-# Configurações padrão para detecção de palmas
-DEFAULT_CLAP_THRESHOLD = int(os.environ.get("JARVIS_CLAP_THRESH", "1500"))
-DEFAULT_MIC_DEVICE = os.environ.get("JARVIS_MIC", None)  # None = default
+# Configurações padrão para detecção de palmas (sobrescritas por
+# JARVIS_CLAP_THRESH / JARVIS_MIC via ``envvar`` nas opções do click).
+DEFAULT_CLAP_THRESHOLD = 1500
+DEFAULT_CLAP_COOLDOWN = 0.15  # segundos; evita contar o eco da mesma palma
 
-# Variável global para o processo do servidor
+# Processo do servidor iniciado por nós (e o arquivo de log dele)
 _server_process: Optional[subprocess.Popen] = None
+_server_log: Optional[IO[str]] = None
 
 
-def _rms(data: bytes) -> float:
-    """Compute RMS amplitude of 16-bit PCM bytes."""
-    import struct
+class ClapDetector:
+    """Conta palmas a partir de amplitudes RMS; puro, sem áudio, testável.
 
-    n = len(data) // 2
-    if n == 0:
-        return 0.0
-    shorts = struct.unpack(f"{n}h", data[: n * 2])
-    return (sum(s * s for s in shorts) / n) ** 0.5
+    Uma palma é uma subida acima de ``threshold``. O detector só rearma
+    quando o som cai abaixo do limiar *e* o cooldown passou, então um ruído
+    longo (porta, tosse, música alta) conta como uma palma só, nunca duas.
+    """
+
+    def __init__(
+        self,
+        threshold: float,
+        window: float = 1.0,
+        cooldown: float = DEFAULT_CLAP_COOLDOWN,
+    ) -> None:
+        self.threshold = threshold
+        self.window = window
+        self.cooldown = cooldown
+        self.count = 0
+        self._last_clap = 0.0
+        self._in_clap = False
+
+    def feed(self, amplitude: float, now: float) -> Optional[str]:
+        """Processa um chunk. Retorna ``"clap"``, ``"expired"`` ou ``None``."""
+        event: Optional[str] = None
+        if self.count > 0 and now - self._last_clap > self.window:
+            self.count = 0
+            event = "expired"
+
+        if amplitude <= self.threshold:
+            self._in_clap = False
+            return event
+        if self._in_clap or (self.count > 0 and now - self._last_clap < self.cooldown):
+            return event
+
+        self._in_clap = True
+        self.count += 1
+        self._last_clap = now
+        return "clap"
+
+    def reset(self) -> None:
+        self.count = 0
+        self._in_clap = False
 
 
 def _play_jingle(jingle_path: Path) -> bool:
@@ -54,42 +89,27 @@ def _play_jingle(jingle_path: Path) -> bool:
         return False
 
 
+def _hud_url(port: int, frontend_port: int, path: str) -> str:
+    """URL do HUD: o Vite dev server se estiver rodando, senão o ``jarvis serve``.
+
+    O ``jarvis serve`` já entrega o frontend buildado (SPA) em ``/jarvis``,
+    então abrir a porta do Vite sem ele rodando só mostraria uma página morta.
+    """
+    if _check_server_running(frontend_port, host="127.0.0.1"):
+        return f"http://localhost:{frontend_port}{path}"
+    return f"http://localhost:{port}{path}"
+
+
 def _open_web_interface(
     port: int = 8000, frontend_port: int = 5173, path: str = "/jarvis"
 ) -> None:
     """Abre a interface web no navegador padrão."""
-    # Frontend (Vite dev server) roda na porta 5173 por padrão
-    url = f"http://localhost:{frontend_port}{path}"
+    url = _hud_url(port, frontend_port, path)
     console.print(f"[cyan]Abrindo interface web: {url}[/cyan]")
     try:
         webbrowser.open(url)
     except Exception as exc:
         console.print(f"[yellow]Não foi possível abrir navegador: {exc}[/yellow]")
-
-
-def _get_uv_path() -> str:
-    """Retorna o caminho para o executável uv."""
-    # Tenta várias localizações possíveis
-    candidates = [
-        # 1. Mesmo diretório do Python atual
-        str(
-            Path(sys.executable).parent
-            / ("uv.exe" if sys.platform == "win32" else "uv")
-        ),
-        # 2. ~/.local/bin (instalação padrão do uv)
-        str(
-            Path.home()
-            / ".local"
-            / "bin"
-            / ("uv.exe" if sys.platform == "win32" else "uv")
-        ),
-        # 3. PATH do sistema
-        "uv.exe" if sys.platform == "win32" else "uv",
-    ]
-    for cand in candidates:
-        if Path(cand).exists() or cand == "uv":
-            return cand
-    return "uv"  # fallback
 
 
 def _hud_events(port: int):
@@ -124,11 +144,6 @@ def _start_voice_chat(port: int = 8000, idle_timeout: float = 30.0) -> None:
         )
     except subprocess.CalledProcessError as exc:
         console.print(f"[red]Sessão de voz terminou com erro: {exc}[/red]")
-    except FileNotFoundError:
-        console.print(
-            "[red]Comando 'uv' não encontrado. "
-            "Certifique-se de que uv está no PATH.[/red]"
-        )
 
 
 def _check_server_running(port: int = 8000, host: str = "localhost") -> bool:
@@ -153,7 +168,7 @@ def _server_log_path() -> Path:
 
 def _start_web_server(port: int = 8000) -> bool:
     """Start `jarvis serve` in background if nothing is listening on ``port``."""
-    global _server_process
+    global _server_process, _server_log
 
     if _check_server_running(port, host="127.0.0.1"):
         console.print(f"[dim]Servidor já rodando na porta {port}[/dim]")
@@ -166,10 +181,10 @@ def _start_web_server(port: int = 8000) -> bool:
     )
 
     try:
-        log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+        _server_log = open(log_path, "w", encoding="utf-8", errors="replace")
         popen_kwargs: dict = {
             "cwd": project_dir,
-            "stdout": log_file,
+            "stdout": _server_log,
             "stderr": subprocess.STDOUT,
             "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
         }
@@ -214,7 +229,7 @@ def _start_web_server(port: int = 8000) -> bool:
 
 def _cleanup_server() -> None:
     """Finaliza o processo do servidor se foi iniciado por nós."""
-    global _server_process
+    global _server_process, _server_log
     if _server_process is not None:
         try:
             if sys.platform == "win32":
@@ -225,6 +240,9 @@ def _cleanup_server() -> None:
         except Exception:
             pass
         _server_process = None
+    if _server_log is not None:
+        _server_log.close()
+        _server_log = None
 
 
 def _listen_for_double_clap(
@@ -252,15 +270,9 @@ def _listen_for_double_clap(
     )
     console.print("[dim]Bata duas palmas seguidas para ativar.[/dim]")
 
-    clap_count = 0
-    last_clap_time = 0.0
-    in_clap = False
-    clap_cooldown = 0.15  # segundos para evitar detecção múltipla da mesma palma
+    from openjarvis.speech.voice_io import _rms
 
-    chunks_per_second = sample_rate / chunk
-    cooldown_chunks = int(clap_cooldown * chunks_per_second)
-    cooldown_counter = 0
-
+    detector = ClapDetector(threshold, window=clap_window)
     with sd.RawInputStream(
         samplerate=sample_rate,
         channels=1,
@@ -270,40 +282,16 @@ def _listen_for_double_clap(
     ) as stream:
         while True:
             raw, _ = stream.read(chunk)
-            data = bytes(raw)
-            amplitude = _rms(data)
-
-            if cooldown_counter > 0:
-                cooldown_counter -= 1
-
-            if amplitude > threshold and cooldown_counter == 0:
-                now = time.time()
-                if not in_clap:
-                    in_clap = True
-                    if clap_count == 0 or (now - last_clap_time) <= clap_window:
-                        clap_count += 1
-                        last_clap_time = now
-                        console.print(
-                            f"[green]Palma {clap_count} detectada![/green] "
-                            f"(RMS={amplitude:.0f})"
-                        )
-                        if clap_count >= 2:
-                            return True
-                    else:
-                        # Primeira palma muito antiga, reinicia contagem
-                        clap_count = 1
-                        last_clap_time = now
-                        console.print(
-                            "[yellow]Janela expirada. "
-                            "Reiniciando contagem. Palma 1.[/yellow]"
-                        )
-                    cooldown_counter = cooldown_chunks
-            else:
-                in_clap = False
-
-            # Reset se passou muito tempo desde a primeira palma
-            if clap_count > 0 and (time.time() - last_clap_time) > clap_window:
-                clap_count = 0
+            amplitude = _rms(bytes(raw))
+            event = detector.feed(amplitude, time.monotonic())
+            if event == "clap":
+                console.print(
+                    f"[green]Palma {detector.count} detectada![/green] "
+                    f"(RMS={amplitude:.0f})"
+                )
+                if detector.count >= 2:
+                    return True
+            elif event == "expired":
                 console.print(
                     "[dim]Janela de palmas expirada. Aguardando nova sequência...[/dim]"
                 )
@@ -315,6 +303,7 @@ def _listen_for_double_clap(
     "-t",
     type=int,
     default=DEFAULT_CLAP_THRESHOLD,
+    envvar="JARVIS_CLAP_THRESH",
     show_default=True,
     help=(
         "Sensibilidade da palma (RMS). Menor = mais sensível. "
@@ -326,6 +315,7 @@ def _listen_for_double_clap(
     "-m",
     type=int,
     default=None,
+    envvar="JARVIS_MIC",
     help=(
         "ID do microfone (use 'python -m sounddevice' para listar). "
         "Variável de ambiente: JARVIS_MIC"
