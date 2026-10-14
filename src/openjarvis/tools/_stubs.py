@@ -48,8 +48,10 @@ class _BoundedToolRunner:
         self._closed = False
 
     def submit(
-        self, function: Callable[..., ToolResult], **params: Any
+        self, function: Callable[..., ToolResult], /, **params: Any
     ) -> concurrent.futures.Future[ToolResult] | None:
+        # ``function`` is positional-only: tool arguments are model-chosen,
+        # and one named "function" must land in ``params``, not collide.
         self._ensure_started()
         future: concurrent.futures.Future[ToolResult] = concurrent.futures.Future()
         try:

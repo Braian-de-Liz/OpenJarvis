@@ -249,6 +249,17 @@ class TestToolExecutor:
         assert result.content == "hi"
         assert result.latency_seconds > 0
 
+    def test_execute_with_argument_named_function(self):
+        # Models pick argument names; one called "function" used to collide
+        # with the runner's own parameter and 500 the whole chat request.
+        executor = ToolExecutor([_EchoTool()])
+        call = ToolCall(
+            id="1", name="echo", arguments='{"text":"hi","function":"volume"}'
+        )
+        result = executor.execute(call)
+        assert result.success is True
+        assert result.content == "hi"
+
     def test_execute_unknown_tool(self):
         executor = ToolExecutor([_EchoTool()])
         call = ToolCall(id="1", name="nonexistent", arguments="{}")
