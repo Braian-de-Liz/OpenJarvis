@@ -266,7 +266,11 @@ def chat(
                                 if isinstance(tcls, type) and issubclass(
                                     tcls, BaseTool
                                 ):
-                                    tool_instances.append(tcls())
+                                    from openjarvis.tools._paths import file_tool_kwargs
+
+                                    tool_instances.append(
+                                        tcls(**file_tool_kwargs(tname, config))
+                                    )
                                 elif isinstance(tcls, BaseTool):
                                     tool_instances.append(tcls)
                         if tool_instances:
@@ -356,7 +360,7 @@ def chat(
             events=events,
             idle_timeout=idle_timeout,
             silence_threshold=silence_threshold,
-            language=voice_session.language(),
+            language=voice_session.get_stt_language(),
         )
 
         # Mirror tool calls onto the HUD (the agent publishes on this bus).

@@ -58,6 +58,13 @@ class VoiceSession:
             self._stt_resolved = True
         return self._stt_backend
 
+    def get_stt_language(self) -> Optional[str]:
+        """Return the configured ``speech.language``, or None to auto-detect."""
+        from openjarvis.core.config import load_config
+
+        config = self._config if self._config is not None else load_config()
+        return (getattr(config.speech, "language", "") or "").strip() or None
+
     def get_tts_backend(self) -> Any:
         """Return a cached healthy TTS backend, falling through once per key."""
         if self._tts_backend is not None:
@@ -103,14 +110,6 @@ class VoiceSession:
                 f"({substitute or 'backend default'}).[/dim yellow]"
             )
         return substitute, speed
-
-    def language(self) -> Optional[str]:
-        """Configured STT language (``speech.language``), or ``None`` = auto."""
-        from openjarvis.core.config import load_config
-
-        config = self._config if self._config is not None else load_config()
-        speech = getattr(config, "speech", None)
-        return (getattr(speech, "language", "") or "").strip() or None
 
     def discard_tts_backend(self) -> None:
         """Forget a backend that failed synthesis and allow the next fallback."""
@@ -161,7 +160,7 @@ def record_voice(
     console.print("[dim]Transcribing…[/dim]")
     try:
         result = backend.transcribe(
-            audio_bytes, format="wav", language=active_session.language()
+            audio_bytes, format="wav", language=active_session.get_stt_language()
         )
         text = result.text.strip()
         if text:
