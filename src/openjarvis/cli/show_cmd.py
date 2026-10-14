@@ -4,12 +4,11 @@ toca jingle, abre interface web e inicia chat por voz."""
 from __future__ import annotations
 
 import os
+import socket
+import subprocess
 import sys
 import time
 import webbrowser
-import subprocess
-import threading
-import socket
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +28,7 @@ _server_process: Optional[subprocess.Popen] = None
 def _rms(data: bytes) -> float:
     """Compute RMS amplitude of 16-bit PCM bytes."""
     import struct
+
     n = len(data) // 2
     if n == 0:
         return 0.0
@@ -44,6 +44,7 @@ def _play_jingle(jingle_path: Path) -> bool:
     try:
         import sounddevice as sd
         import soundfile as sf
+
         data, sr = sf.read(str(jingle_path), dtype="float32")
         sd.play(data, sr)
         sd.wait()
@@ -53,7 +54,9 @@ def _play_jingle(jingle_path: Path) -> bool:
         return False
 
 
-def _open_web_interface(port: int = 8000, frontend_port: int = 5173, path: str = "/jarvis") -> None:
+def _open_web_interface(
+    port: int = 8000, frontend_port: int = 5173, path: str = "/jarvis"
+) -> None:
     """Abre a interface web no navegador padrão."""
     # Frontend (Vite dev server) roda na porta 5173 por padrão
     url = f"http://localhost:{frontend_port}{path}"
@@ -69,9 +72,17 @@ def _get_uv_path() -> str:
     # Tenta várias localizações possíveis
     candidates = [
         # 1. Mesmo diretório do Python atual
-        str(Path(sys.executable).parent / ("uv.exe" if sys.platform == "win32" else "uv")),
+        str(
+            Path(sys.executable).parent
+            / ("uv.exe" if sys.platform == "win32" else "uv")
+        ),
         # 2. ~/.local/bin (instalação padrão do uv)
-        str(Path.home() / ".local" / "bin" / ("uv.exe" if sys.platform == "win32" else "uv")),
+        str(
+            Path.home()
+            / ".local"
+            / "bin"
+            / ("uv.exe" if sys.platform == "win32" else "uv")
+        ),
         # 3. PATH do sistema
         "uv.exe" if sys.platform == "win32" else "uv",
     ]
@@ -94,15 +105,19 @@ def _start_voice_chat(port: int = 8000, idle_timeout: float = 30.0) -> None:
     Returns when the session ends (idle timeout or exit phrase).
     """
     # Detecta o diretório do projeto (onde está o pyproject.toml)
-    project_dir = Path(__file__).resolve().parents[3]  # src/openjarvis/cli -> project root
+    project_dir = (
+        Path(__file__).resolve().parents[3]
+    )  # src/openjarvis/cli -> project root
     console.print(f"[green]Iniciando sessão de voz em {project_dir}[/green]")
     try:
         subprocess.run(
             _jarvis_cmd(
                 "chat",
                 "--hands-free",
-                "--idle-timeout", str(idle_timeout),
-                "--events-url", f"http://127.0.0.1:{port}",
+                "--idle-timeout",
+                str(idle_timeout),
+                "--events-url",
+                f"http://127.0.0.1:{port}",
             ),
             cwd=project_dir,
             check=True,
@@ -110,7 +125,10 @@ def _start_voice_chat(port: int = 8000, idle_timeout: float = 30.0) -> None:
     except subprocess.CalledProcessError as exc:
         console.print(f"[red]Sessão de voz terminou com erro: {exc}[/red]")
     except FileNotFoundError:
-        console.print("[red]Comando 'uv' não encontrado. Certifique-se de que uv está no PATH.[/red]")
+        console.print(
+            "[red]Comando 'uv' não encontrado. "
+            "Certifique-se de que uv está no PATH.[/red]"
+        )
 
 
 def _check_server_running(port: int = 8000, host: str = "localhost") -> bool:
@@ -143,7 +161,9 @@ def _start_web_server(port: int = 8000) -> bool:
 
     project_dir = Path(__file__).resolve().parents[3]
     log_path = _server_log_path()
-    console.print(f"[cyan]Iniciando jarvis serve na porta {port} (log: {log_path})...[/cyan]")
+    console.print(
+        f"[cyan]Iniciando jarvis serve na porta {port} (log: {log_path})...[/cyan]"
+    )
 
     try:
         log_file = open(log_path, "w", encoding="utf-8", errors="replace")
@@ -168,14 +188,19 @@ def _start_web_server(port: int = 8000) -> bool:
             if _server_process.poll() is not None:
                 break
             if _check_server_running(port, host="127.0.0.1"):
-                console.print(f"[green]Servidor iniciado em http://127.0.0.1:{port}[/green]")
+                console.print(
+                    f"[green]Servidor iniciado em http://127.0.0.1:{port}[/green]"
+                )
                 return True
 
         console.print(
-            f"[red]Servidor não subiu na porta {port}. Últimas linhas de {log_path}:[/red]"
+            f"[red]Servidor não subiu na porta {port}. "
+            f"Últimas linhas de {log_path}:[/red]"
         )
         try:
-            tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+            tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[
+                -15:
+            ]
             for line in tail:
                 console.print(f"[dim]  {line}[/dim]", markup=False)
         except OSError:
@@ -216,10 +241,15 @@ def _listen_for_double_clap(
     try:
         import sounddevice as sd
     except ImportError:
-        console.print("[red]sounddevice não instalado. Rode: uv sync --extra voice[/red]")
+        console.print(
+            "[red]sounddevice não instalado. Rode: uv sync --extra voice[/red]"
+        )
         return False
 
-    console.print(f"[dim]Ouvindo microfone... (threshold={threshold}, device={mic_device or 'default'})[/dim]")
+    console.print(
+        f"[dim]Ouvindo microfone... (threshold={threshold}, "
+        f"device={mic_device or 'default'})[/dim]"
+    )
     console.print("[dim]Bata duas palmas seguidas para ativar.[/dim]")
 
     clap_count = 0
@@ -253,14 +283,20 @@ def _listen_for_double_clap(
                     if clap_count == 0 or (now - last_clap_time) <= clap_window:
                         clap_count += 1
                         last_clap_time = now
-                        console.print(f"[green]Palma {clap_count} detectada![/green] (RMS={amplitude:.0f})")
+                        console.print(
+                            f"[green]Palma {clap_count} detectada![/green] "
+                            f"(RMS={amplitude:.0f})"
+                        )
                         if clap_count >= 2:
                             return True
                     else:
                         # Primeira palma muito antiga, reinicia contagem
                         clap_count = 1
                         last_clap_time = now
-                        console.print(f"[yellow]Janela expirada. Reiniciando contagem. Palma 1.[/yellow]")
+                        console.print(
+                            "[yellow]Janela expirada. "
+                            "Reiniciando contagem. Palma 1.[/yellow]"
+                        )
                     cooldown_counter = cooldown_chunks
             else:
                 in_clap = False
@@ -268,7 +304,9 @@ def _listen_for_double_clap(
             # Reset se passou muito tempo desde a primeira palma
             if clap_count > 0 and (time.time() - last_clap_time) > clap_window:
                 clap_count = 0
-                console.print("[dim]Janela de palmas expirada. Aguardando nova sequência...[/dim]")
+                console.print(
+                    "[dim]Janela de palmas expirada. Aguardando nova sequência...[/dim]"
+                )
 
 
 @click.command()
@@ -278,14 +316,20 @@ def _listen_for_double_clap(
     type=int,
     default=DEFAULT_CLAP_THRESHOLD,
     show_default=True,
-    help="Sensibilidade da palma (RMS). Menor = mais sensível. Variável de ambiente: JARVIS_CLAP_THRESH",
+    help=(
+        "Sensibilidade da palma (RMS). Menor = mais sensível. "
+        "Variável de ambiente: JARVIS_CLAP_THRESH"
+    ),
 )
 @click.option(
     "--mic",
     "-m",
     type=int,
     default=None,
-    help="ID do microfone (use 'python -m sounddevice' para listar). Variável de ambiente: JARVIS_MIC",
+    help=(
+        "ID do microfone (use 'python -m sounddevice' para listar). "
+        "Variável de ambiente: JARVIS_MIC"
+    ),
 )
 @click.option(
     "--port",
@@ -354,7 +398,10 @@ def show(
       JARVIS_MIC          ID do microfone (padrão: dispositivo padrão)
     """
     console.print("[bold green]🔊 jarvis-show — Ativação por palmas[/bold green]")
-    console.print(f"  Threshold: {threshold}  |  Mic: {mic or 'default'}  |  Janela: {clap_window}s")
+    console.print(
+        f"  Threshold: {threshold}  |  Mic: {mic or 'default'}  "
+        f"|  Janela: {clap_window}s"
+    )
 
     # Caminho do jingle (procura em assets/ na raiz do projeto)
     project_dir = Path(__file__).resolve().parents[3]
@@ -377,7 +424,10 @@ def show(
                 clap_window=clap_window,
             )
             if detected:
-                console.print("[bold green]✨ Duas palmas detectadas! Ativando Jarvis...[/bold green]")
+                console.print(
+                    "[bold green]✨ Duas palmas detectadas! "
+                    "Ativando Jarvis...[/bold green]"
+                )
                 events.state("activated")
 
                 if not no_jingle:
@@ -386,18 +436,23 @@ def show(
                 # Open the HUD once; later sessions reuse the same tab (it
                 # reconnects to the WebSocket on its own).
                 if not no_web and not hud_opened:
-                    _open_web_interface(port, frontend_port=frontend_port, path=web_path)
+                    _open_web_interface(
+                        port, frontend_port=frontend_port, path=web_path
+                    )
                     hud_opened = True
 
                 _start_voice_chat(port=port, idle_timeout=idle_timeout)
 
                 # Após o chat terminar, volta a ouvir
-                console.print("\n[dim]Sessão encerrada. Voltando a ouvir palmas...[/dim]\n")
+                console.print(
+                    "\n[dim]Sessão encerrada. Voltando a ouvir palmas...[/dim]\n"
+                )
     except KeyboardInterrupt:
         console.print("\n[dim]Encerrado pelo usuário.[/dim]")
     except Exception as exc:
         console.print(f"\n[red]Erro: {exc}[/red]")
         import traceback
+
         traceback.print_exc()
     finally:
         if events is not None:

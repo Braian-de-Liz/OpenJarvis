@@ -131,3 +131,8 @@ learning.db
 minion_logs/
 *.oj-debug.json
 oj-debug.*.json
+
+# Local voice/HUD debugging artifacts
+/*.wav
+/server.err
+/show_test_*.txt
