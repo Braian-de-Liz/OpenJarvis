@@ -182,6 +182,12 @@ class GpuMonitor:
             logger.debug("GPU monitor availability check failed: %s", exc)
             return False
 
+    def snapshot(self) -> List[GpuSnapshot]:
+        """Read current metrics from every GPU once (no background thread)."""
+        if not self._initialized:
+            return []
+        return self._poll_once()
+
     # -- polling thread internals ---------------------------------------------
 
     def _poll_once(self) -> List[GpuSnapshot]:

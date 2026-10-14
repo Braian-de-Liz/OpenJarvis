@@ -1354,6 +1354,14 @@ def include_all_routes(app) -> None:
     except Exception:
         logger.debug("Voice events relay not available", exc_info=True)
 
+    # Host telemetry for the /jarvis HUD (CPU/RAM/net via psutil, GPU via NVML).
+    try:
+        from openjarvis.server.system_metrics import create_system_metrics_router
+
+        app.include_router(create_system_metrics_router())
+    except Exception:
+        logger.debug("System metrics route not available", exc_info=True)
+
 
 __all__ = [
     "include_all_routes",

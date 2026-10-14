@@ -360,7 +360,8 @@ function HUDPanel({
 }
 
 // ─── System Metrics Panel ───
-type Metrics = { cpu: number; gpu: number; ram: number; netUp: number; netDown: number; temp: number };
+// gpu/temp are null when the host has no NVIDIA GPU (NVML unavailable).
+type Metrics = { cpu: number; gpu: number | null; ram: number; netUp: number; netDown: number; temp: number | null };
 
 function useSystemMetrics() {
   const [metrics, setMetrics] = useState<Metrics>({ cpu: 20, gpu: 10, ram: 45, netUp: 0, netDown: 0, temp: 45 });
@@ -382,11 +383,11 @@ function useSystemMetrics() {
       setLive(false);
       setMetrics(prev => ({
         cpu: Math.min(100, Math.max(0, prev.cpu + (Math.random() - 0.5) * 10)),
-        gpu: Math.min(100, Math.max(0, prev.gpu + (Math.random() - 0.5) * 8)),
+        gpu: Math.min(100, Math.max(0, (prev.gpu ?? 10) + (Math.random() - 0.5) * 8)),
         ram: Math.min(100, Math.max(0, prev.ram + (Math.random() - 0.5) * 3)),
         netUp: Math.random() * 50,
         netDown: Math.random() * 200,
-        temp: Math.min(90, Math.max(30, prev.temp + (Math.random() - 0.5) * 4)),
+        temp: Math.min(90, Math.max(30, (prev.temp ?? 45) + (Math.random() - 0.5) * 4)),
       }));
     };
     update();
@@ -399,7 +400,7 @@ function useSystemMetrics() {
 
 function MetricBar({ label, value, unit, max = 100, icon: Icon, color }: {
   label: string;
-  value: number;
+  value: number | null;
   unit: string;
   max?: number;
   icon: React.ComponentType<{ size?: number; className?: string }>;
@@ -413,13 +414,13 @@ function MetricBar({ label, value, unit, max = 100, icon: Icon, color }: {
           {label}
         </span>
         <span className="text-cyan-200 tabular-nums">
-          {value.toFixed(1)}<span className="text-zinc-500 ml-0.5">{unit}</span>
+          {value === null ? <span className="text-zinc-500">—</span> : <>{value.toFixed(1)}<span className="text-zinc-500 ml-0.5">{unit}</span></>}
         </span>
       </div>
       <div className="h-1 rounded-full overflow-hidden bg-cyan-400/10">
         <div
           className="h-full rounded-full transition-[width] duration-500 ease-out"
-          style={{ width: `${Math.min(100, (value / max) * 100)}%`, background: color, boxShadow: `0 0 8px ${color}80` }}
+          style={{ width: `${value === null ? 0 : Math.min(100, (value / max) * 100)}%`, background: color, boxShadow: `0 0 8px ${color}80` }}
         />
       </div>
     </div>
@@ -432,7 +433,7 @@ function SystemMetrics({ metrics }: { metrics: Metrics }) {
       <MetricBar label="CPU" value={metrics.cpu} unit="%" icon={Cpu} color="#22d3ee" />
       <MetricBar label="GPU" value={metrics.gpu} unit="%" icon={Activity} color="#a855f7" />
       <MetricBar label="RAM" value={metrics.ram} unit="%" icon={HardDrive} color="#f59e0b" />
-      <MetricBar label="TEMP" value={metrics.temp} unit="°C" icon={Thermometer} color="#f43f5e" />
+      <MetricBar label="TEMP GPU" value={metrics.temp} unit="°C" icon={Thermometer} color="#f43f5e" />
       <div className="grid grid-cols-2 gap-2 pt-1">
         {[
           { label: 'UP', value: metrics.netUp },

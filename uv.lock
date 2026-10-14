@@ -5122,6 +5122,7 @@ desktop = [
     { name = "faster-whisper" },
     { name = "numpy" },
     { name = "onnxruntime", version = "1.23.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "sounddevice" },
@@ -5246,6 +5247,7 @@ security-signing = [
 ]
 server = [
     { name = "fastapi" },
+    { name = "psutil" },
     { name = "pydantic" },
     { name = "python-multipart" },
     { name = "uvicorn" },
@@ -5361,6 +5363,8 @@ requires-dist = [
     { name = "posthog", specifier = ">=3.0" },
     { name = "praw", marker = "extra == 'channel-reddit'", specifier = ">=7.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.0" },
+    { name = "psutil", marker = "extra == 'desktop'", specifier = ">=5.9" },
+    { name = "psutil", marker = "extra == 'server'", specifier = ">=5.9" },
     { name = "pyautogui", marker = "extra == 'gui-automation'", specifier = ">=0.9.54" },
     { name = "pyautogui", marker = "extra == 'windows-control'", specifier = ">=0.9.54" },
     { name = "pycaw", marker = "sys_platform == 'win32' and extra == 'windows-control'", specifier = ">=20240101" },
