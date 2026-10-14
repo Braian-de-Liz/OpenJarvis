@@ -2,10 +2,16 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useAppStore } from '../lib/store';
-import { useVoiceEvents, type VoiceLogEntry } from '../lib/useVoiceEvents';
+import { useVoiceEvents } from '../lib/useVoiceEvents';
 import { apiFetch, checkHealth } from '../lib/api';
 import { sendChatTurn } from '../lib/chatTurn';
 import { useHudSettings } from '../lib/hudSettings';
+import { useApprovalsStore } from '../lib/approvalsStore';
+import { toSpeakable } from '../lib/speakable';
+import { HudApprovals } from '../components/Jarvis/HudApprovals';
+import { HudLog } from '../components/Jarvis/HudLog';
+import { ShortcutsOverlay } from '../components/Jarvis/ShortcutsOverlay';
+import { useMicLevel } from '../components/Jarvis/useMicLevel';
 import { useSpeech } from '../hooks/useSpeech';
 import { useTts } from '../hooks/useTts';
 // Bundled locally so the HUD typography also works offline (Tauri).
@@ -16,7 +22,8 @@ import '@fontsource/ibm-plex-mono/500.css';
 import {
   Mic, MicOff, Volume2, Headphones, Cpu, HardDrive, Wifi, Activity, Terminal, X,
   ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
-  MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2,
+  MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2, ShieldAlert,
+  Plus, Eraser, HelpCircle,
 } from 'lucide-react';
 
 /**
@@ -317,11 +324,16 @@ function HUDPanel({
   collapsible = false,
   grow = false,
   className = '',
+  actions,
+  id,
 }: {
   title: string;
   children: React.ReactNode;
   icon?: React.ReactNode;
   badge?: string;
+  /** Extra header buttons (shown before the panel code). */
+  actions?: React.ReactNode;
+  id?: string;
   /** Small panel designation shown in the header, e.g. SYS·01. */
   code?: string;
   collapsible?: boolean;
@@ -333,6 +345,7 @@ function HUDPanel({
 
   return (
     <section
+      id={id}
       className={`jarvis-hud-panel ${grow && expanded ? 'lg:flex-1 lg:min-h-0' : 'shrink-0'} ${className}`}
     >
       <header className="jarvis-hud-panel-head">
@@ -342,6 +355,7 @@ function HUDPanel({
           {badge && <span className="jarvis-badge">{badge}</span>}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {actions}
           {code && <span className="jarvis-panel-code">{code}</span>}
           {collapsible && (
           <button
@@ -482,90 +496,6 @@ function SystemMetrics({ metrics }: { metrics: Metrics | null }) {
   );
 }
 
-// ─── Terminal Chat Log ───
-function TerminalChat({ voiceLog = [], userName }: { voiceLog?: VoiceLogEntry[]; userName: string }) {
-  const messages = useAppStore(s => s.messages);
-  const streamState = useAppStore(s => s.streamState);
-  const isStreaming = streamState.isStreaming;
-  const streamContent = streamState.content;
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [autoScroll, setAutoScroll] = useState(true);
-
-  useEffect(() => {
-    if (autoScroll && containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [messages, streamContent, isStreaming, autoScroll, voiceLog]);
-
-  const formatTime = (ts: number) => new Date(ts).toLocaleTimeString('pt-BR', { hour12: false });
-
-  // Typed chat (store) + hands-free voice turns, in time order.
-  const entries = [
-    ...messages.map((m) => ({
-      id: m.id,
-      role: m.role as string,
-      text: m.content,
-      timestamp: m.timestamp || Date.now(),
-    })),
-    ...voiceLog.map((v) => ({ id: v.id, role: v.role as string, text: v.text, timestamp: v.timestamp })),
-  ].sort((a, b) => a.timestamp - b.timestamp);
-
-  return (
-    <div
-      ref={containerRef}
-      onScroll={(e) => {
-        const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
-        setAutoScroll(scrollHeight - scrollTop - clientHeight < 50);
-      }}
-      className="jarvis-terminal jarvis-font-hud"
-    >
-      {entries.length === 0 && !isStreaming ? (
-        <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-6">
-          <p className="jarvis-font-display text-cyan-400/70 text-sm tracking-[0.3em]">JARVIS ONLINE</p>
-          <p className="text-[11px] text-zinc-500">Aguardando comando, {userName}.</p>
-          <div className="mt-2 flex flex-wrap justify-center gap-1.5">
-            {['"Aumente o volume"', '"Feche o Chrome"', '"Print da tela"'].map((s) => (
-              <kbd key={s} className="jarvis-chip">{s}</kbd>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <div className="space-y-2.5">
-          {entries.map((msg) => msg.role === 'system' ? (
-            <div key={msg.id} className="terminal-message text-zinc-500 italic">
-              <span className="text-zinc-600">{formatTime(msg.timestamp)}</span>
-              <span className="mx-1.5 text-cyan-500/40">◆</span>
-              {msg.text}
-            </div>
-          ) : (
-            <div key={msg.id} className={`terminal-message ${msg.role === 'user' ? 'is-user' : 'is-jarvis'}`}>
-              <div className="flex items-baseline gap-2 text-[10px] tracking-wider">
-                <span className={msg.role === 'user' ? 'text-amber-400' : 'text-cyan-400'}>
-                  {msg.role === 'user' ? userName.toUpperCase() : 'JARVIS'}
-                </span>
-                <span className="text-zinc-600">{formatTime(msg.timestamp)}</span>
-              </div>
-              <p className={`whitespace-pre-wrap break-words ${msg.role === 'user' ? 'text-amber-100/90' : 'text-cyan-100/90'}`}>
-                {msg.text}
-              </p>
-            </div>
-          ))}
-
-          {isStreaming && streamContent && (
-            <div className="terminal-message is-jarvis">
-              <div className="text-[10px] tracking-wider text-cyan-400">JARVIS</div>
-              <p className="whitespace-pre-wrap break-words text-cyan-100/90">
-                {streamContent}
-                <span className="ml-0.5 text-cyan-400 animate-blink">█</span>
-              </p>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
 function useClock() {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
@@ -580,7 +510,11 @@ export function JARVISMode() {
   const navigate = useNavigate();
   const hud = useHudSettings((s) => s.hud);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
+  const messages = useAppStore((s) => s.messages);
+  const createConversation = useAppStore((s) => s.createConversation);
+  const approvals = useApprovalsStore();
 
   const voice = useVoiceEvents();
   const speech = useSpeech();
@@ -608,11 +542,14 @@ export function JARVISMode() {
   const chatStreaming = streamState.isStreaming;
   const isStreaming = chatStreaming || voiceThinking || browserTranscribing || tts.isLoading;
   const isActive = activeId !== null || voiceSessionActive;
-  // The browser paths have no level meter; a steady mid level keeps the
-  // waveform alive (it already modulates per bar).
+  // Browser mic: real analyser level. TTS playback has no meter; a steady mid
+  // level keeps the waveform alive (it already modulates per bar).
+  const micLevel = useMicLevel(browserRecording);
   const audioLevel = voiceListening || voiceSpeaking
     ? voice.level
-    : browserRecording || tts.isSpeaking ? 0.55 : 0;
+    : browserRecording
+      ? micLevel ?? 0.55
+      : tts.isSpeaking ? 0.55 : 0;
 
   const micEnabled = settings.speechEnabled && speech.available;
   const ttsEnabled = settings.voiceOutputEnabled && tts.available;
@@ -624,14 +561,25 @@ export function JARVISMode() {
     if (tts.error) toast.error(`Voz: ${tts.error}`, { duration: 6000 });
   }, [tts.error]);
 
-  // Esc closes the settings drawer (the HUD is the home screen; no "exit").
+  // Pending approvals: the classic UI's bell isn't mounted here, so the HUD
+  // polls on its own and announces new requests.
+  const loadApprovals = approvals.load;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSettingsOpen(false);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+    const refresh = () =>
+      loadApprovals().then((fresh) => {
+        for (const a of fresh) {
+          toast.warning(`Aprovação necessária: ${a.description}`, { duration: 10000 });
+        }
+      });
+    refresh();
+    const id = setInterval(refresh, 10000);
+    return () => clearInterval(id);
+  }, [loadApprovals]);
+
+  const handleDecide = async (id: string, approve: boolean) => {
+    const ok = await approvals.decide(id, approve);
+    if (!ok) toast.error('Não foi possível registrar a decisão. Tente de novo.');
+  };
 
   const handleSendMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
@@ -650,7 +598,8 @@ export function JARVISMode() {
     if (voiceOutputEnabled && voiceAutoplay) {
       const msgs = useAppStore.getState().messages;
       const last = msgs[msgs.length - 1];
-      void tts.speak(last?.id ?? `hud-${Date.now()}`, result.content);
+      const spoken = toSpeakable(result.content);
+      if (spoken) void tts.speak(last?.id ?? `hud-${Date.now()}`, spoken);
     }
   }, [tts]);
 
@@ -672,6 +621,67 @@ export function JARVISMode() {
     tts.stop();
     await speech.startRecording();
   };
+
+  const handleNewConversation = () => {
+    if (chatStreaming) return;
+    createConversation(selectedModel);
+  };
+
+  // Keyboard: Esc closes panels, "?" toggles help, hold Ctrl+Space to talk.
+  // Handlers read the latest state through a ref so the listener is bound once.
+  const pttActive = useRef(false);
+  // Key released before getUserMedia resolved: stop as soon as recording starts.
+  const pttPending = useRef(false);
+  const keyState = useLatest({
+    canTalk: hud.pushToTalk && micEnabled && !chatStreaming && !browserTranscribing,
+    browserRecording,
+    handleMic,
+  });
+  useEffect(() => {
+    const isTyping = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(t.tagName));
+
+    const onDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSettingsOpen(false);
+        setShortcutsOpen(false);
+        return;
+      }
+      if (e.key === '?' && !isTyping(e.target)) {
+        e.preventDefault();
+        setShortcutsOpen((o) => !o);
+        return;
+      }
+      if (e.code === 'Space' && e.ctrlKey) {
+        e.preventDefault();
+        const s = keyState.current;
+        if (e.repeat || pttActive.current || !s.canTalk || s.browserRecording) return;
+        pttActive.current = true;
+        pttPending.current = false;
+        void s.handleMic();
+      }
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (!pttActive.current || (e.code !== 'Space' && e.key !== 'Control')) return;
+      pttActive.current = false;
+      const s = keyState.current;
+      if (s.browserRecording) void s.handleMic(); // stop → transcribe → send
+      else pttPending.current = true;
+    };
+    window.addEventListener('keydown', onDown);
+    window.addEventListener('keyup', onUp);
+    return () => {
+      window.removeEventListener('keydown', onDown);
+      window.removeEventListener('keyup', onUp);
+    };
+  }, [keyState]);
+
+  useEffect(() => {
+    if (browserRecording && pttPending.current) {
+      pttPending.current = false;
+      void keyState.current.handleMic();
+    }
+  }, [browserRecording, keyState]);
 
   const handleSpeakTest = () => {
     if (tts.isSpeaking || tts.isLoading) {
@@ -712,6 +722,8 @@ export function JARVISMode() {
       ? 'Diga seu comando… ("Jarvis, desligar" encerra)'
       : voiceSessionActive
         ? 'Sessão de voz ativa'
+        : micEnabled && hud.pushToTalk
+          ? 'Bata duas palmas, segure Ctrl+Espaço para falar ou digite'
         : micEnabled
           ? 'Bata duas palmas, use o microfone ou digite um comando'
           : 'Bata duas palmas ou digite um comando';
@@ -766,6 +778,19 @@ export function JARVISMode() {
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
+          {approvals.items.length > 0 && (
+            <button
+              type="button"
+              className="jarvis-pill jarvis-approval-pill"
+              onClick={() => document.getElementById('jarvis-approvals')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+              title="Ações aguardando sua aprovação"
+            >
+              <ShieldAlert size={12} />
+              <span>
+                {approvals.items.length} {approvals.items.length === 1 ? 'APROVAÇÃO' : 'APROVAÇÕES'}
+              </span>
+            </button>
+          )}
           <div className="jarvis-pill hidden md:flex" title={now.toLocaleDateString('pt-BR')}>
             <span className="text-zinc-500">{now.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).toUpperCase().replace('.', '')}</span>
             <span className="text-cyan-200 tabular-nums">{now.toLocaleTimeString('pt-BR', { hour12: false })}</span>
@@ -782,6 +807,9 @@ export function JARVISMode() {
           </div>
           <button onClick={() => navigate('/chat')} className="jarvis-icon-btn" title="Interface clássica (chat, agentes, dashboard)" aria-label="Abrir interface clássica">
             <MessageSquare size={15} />
+          </button>
+          <button onClick={() => setShortcutsOpen(true)} className="jarvis-icon-btn hidden sm:inline-flex" title="Atalhos de teclado (?)" aria-label="Atalhos de teclado">
+            <HelpCircle size={15} />
           </button>
           <button onClick={() => setSettingsOpen(true)} className="jarvis-icon-btn" title="Configurações do HUD" aria-label="Configurações do HUD">
             <Settings size={15} />
@@ -804,8 +832,40 @@ export function JARVISMode() {
               <SystemMetrics metrics={metrics} />
             </HUDPanel>
           )}
-          <HUDPanel title="Log de Comunicação" icon={<Terminal size={14} />} code="COM·02" collapsible grow className="h-80 lg:h-auto">
-            <TerminalChat voiceLog={voice.log} userName={hud.userName} />
+          <HUDPanel
+            title="Log de Comunicação"
+            icon={<Terminal size={14} />}
+            code="COM·02"
+            collapsible
+            grow
+            className="h-80 lg:h-auto"
+            actions={
+              <>
+                {voice.log.length > 0 && (
+                  <button onClick={voice.clearLog} className="jarvis-icon-btn" title="Limpar transcrições de voz" aria-label="Limpar transcrições de voz">
+                    <Eraser size={13} />
+                  </button>
+                )}
+                <button
+                  onClick={handleNewConversation}
+                  disabled={chatStreaming || messages.length === 0}
+                  className="jarvis-icon-btn disabled:opacity-30"
+                  title="Nova conversa"
+                  aria-label="Nova conversa"
+                >
+                  <Plus size={14} />
+                </button>
+              </>
+            }
+          >
+            <HudLog
+              messages={messages}
+              voiceLog={voice.log}
+              stream={streamState}
+              activeId={activeId}
+              userName={hud.userName}
+              emptyHints={['"Aumente o volume"', '"Feche o Chrome"', '"Print da tela"']}
+            />
           </HUDPanel>
         </div>
 
@@ -867,6 +927,18 @@ export function JARVISMode() {
 
         {/* Right column */}
         <div className="jarvis-col order-3">
+          {approvals.items.length > 0 && (
+            <HUDPanel
+              id="jarvis-approvals"
+              title="Aprovações"
+              icon={<ShieldAlert size={14} />}
+              badge={String(approvals.items.length)}
+              code="SEC·05"
+              className="jarvis-approvals-panel"
+            >
+              <HudApprovals items={approvals.items} processing={approvals.processing} onDecide={handleDecide} />
+            </HUDPanel>
+          )}
           <HUDPanel title="Status" icon={<Server size={14} />} code="CTL·03" collapsible>
             <div className="space-y-1.5 jarvis-font-hud text-[11px]">
               <SystemControlRow
@@ -915,6 +987,7 @@ export function JARVISMode() {
       </footer>
 
       {settingsOpen && <HUDSettingsDrawer onClose={() => setSettingsOpen(false)} />}
+      {shortcutsOpen && <ShortcutsOverlay pushToTalk={hud.pushToTalk} onClose={() => setShortcutsOpen(false)} />}
     </div>
   );
 }
@@ -1069,6 +1142,13 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
               checked={settings.voiceOutputEnabled && settings.voiceAutoplay}
               disabled={!settings.voiceOutputEnabled}
               onChange={(v) => updateSettings({ voiceAutoplay: v })}
+            />
+            <Toggle
+              label="Push-to-talk (segurar Ctrl+Espaço)"
+              hint="Segure para falar; ao soltar, a fala é enviada"
+              checked={hud.pushToTalk}
+              disabled={!settings.speechEnabled}
+              onChange={(v) => updateHud({ pushToTalk: v })}
             />
             <p className="jarvis-field-hint mt-2">
               Ativação por palmas e sessão mãos-livres: rode <code className="text-cyan-300">jarvis show</code> no terminal.

@@ -12,6 +12,8 @@ export interface HudSettings {
   reducedMotion: boolean;
   /** Show the telemetry panel (CPU/GPU/RAM/network). */
   showTelemetry: boolean;
+  /** Hold Ctrl+Space to record from the browser mic; release to send. */
+  pushToTalk: boolean;
 }
 
 export const HUD_SETTINGS_KEY = 'openjarvis-hud-settings';
@@ -22,6 +24,7 @@ export const HUD_DEFAULTS: HudSettings = {
   scanlines: true,
   reducedMotion: false,
   showTelemetry: true,
+  pushToTalk: true,
 };
 
 export function loadHudSettings(): HudSettings {

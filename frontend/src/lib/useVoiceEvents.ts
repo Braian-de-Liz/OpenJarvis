@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { getBase } from './api';
 import { buildWsProtocols } from './useAgentEvents';
 
@@ -35,6 +35,8 @@ export interface VoiceEventsSnapshot {
   activeTool: string | null;
   engine: string;
   model: string;
+  /** Forget the voice transcript shown in the HUD (live state is untouched). */
+  clearLog: () => void;
 }
 
 const MAX_LOG = 100;
@@ -163,5 +165,7 @@ export function useVoiceEvents(): VoiceEventsSnapshot {
     };
   }, []);
 
-  return { connected, state, level, levelSource, log, activeTool, ...session };
+  const clearLog = useCallback(() => setLog([]), []);
+
+  return { connected, state, level, levelSource, log, activeTool, ...session, clearLog };
 }

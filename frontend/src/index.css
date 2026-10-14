@@ -1195,6 +1195,127 @@
   transition: border-color 0.2s, background 0.2s;
 }
 .jarvis-link-btn + .jarvis-link-btn { margin-top: 6px; }
+
+/* Markdown inside the HUD log */
+.jarvis-md { font-size: 12px; line-height: 1.55; overflow-wrap: anywhere; }
+.jarvis-md > * + * { margin-top: 0.5em; }
+.jarvis-md ul, .jarvis-md ol { padding-left: 1.25em; }
+.jarvis-md ul { list-style: square; }
+.jarvis-md ol { list-style: decimal; }
+.jarvis-md li::marker { color: rgba(var(--jv-cyan), 0.6); }
+.jarvis-md strong { color: #ecfeff; font-weight: 600; }
+.jarvis-md a { color: rgb(var(--jv-cyan)); text-decoration: underline; text-underline-offset: 2px; }
+.jarvis-md h1, .jarvis-md h2, .jarvis-md h3, .jarvis-md h4 {
+  font-family: var(--jv-font-display);
+  color: #a5f3fc;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.jarvis-md :not(pre) > code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: rgba(var(--jv-cyan), 0.1);
+  color: #a5f3fc;
+  font-size: 11px;
+}
+.jarvis-md pre {
+  max-height: 16rem;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--jv-cyan), 0.14);
+  background: rgba(2, 6, 12, 0.9);
+  font-size: 11px;
+}
+.jarvis-md table { border-collapse: collapse; font-size: 11px; display: block; overflow-x: auto; }
+.jarvis-md th, .jarvis-md td { border: 1px solid rgba(var(--jv-cyan), 0.15); padding: 2px 6px; }
+.jarvis-md blockquote { border-left: 2px solid rgba(var(--jv-cyan), 0.4); padding-left: 8px; color: #a1a1aa; }
+
+/* Tool calls in the HUD log */
+.jarvis-tool-chip {
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(var(--jv-purple), 0.25);
+  background: rgba(var(--jv-purple), 0.06);
+  color: #d8b4fe;
+}
+.jarvis-tool-chip.is-success { border-color: rgba(52, 211, 153, 0.3); color: #6ee7b7; background: rgba(52, 211, 153, 0.05); }
+.jarvis-tool-chip.is-error { border-color: rgba(244, 63, 94, 0.35); color: #fda4af; background: rgba(244, 63, 94, 0.06); }
+.jarvis-tool-detail pre {
+  margin-top: 4px;
+  max-height: 8rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #a1a1aa;
+}
+
+/* Approvals */
+.jarvis-approvals-panel { border-color: rgba(251, 191, 36, 0.35); }
+.jarvis-approval {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  background: rgba(251, 191, 36, 0.04);
+}
+.jarvis-approval.is-high { border-color: rgba(244, 63, 94, 0.4); background: rgba(244, 63, 94, 0.05); }
+.jarvis-approval-payload {
+  margin-top: 6px;
+  max-height: 10rem;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: rgba(2, 6, 12, 0.9);
+  color: #a1a1aa;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.jarvis-approval-btn {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 5px 0;
+  border-radius: 6px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  border: 1px solid;
+  transition: background 0.2s, opacity 0.2s;
+}
+.jarvis-approval-btn:disabled { opacity: 0.4; cursor: default; }
+.jarvis-approval-btn.is-approve { color: #6ee7b7; border-color: rgba(52, 211, 153, 0.35); background: rgba(52, 211, 153, 0.08); }
+.jarvis-approval-btn.is-approve:hover:not(:disabled) { background: rgba(52, 211, 153, 0.16); }
+.jarvis-approval-btn.is-deny { color: #fda4af; border-color: rgba(244, 63, 94, 0.35); background: rgba(244, 63, 94, 0.08); }
+.jarvis-approval-btn.is-deny:hover:not(:disabled) { background: rgba(244, 63, 94, 0.16); }
+.jarvis-approval-pill {
+  color: #fcd34d;
+  border-color: rgba(251, 191, 36, 0.5);
+  animation: jarvis-approval-pulse 1.6s ease-in-out infinite;
+}
+@keyframes jarvis-approval-pulse {
+  50% { box-shadow: 0 0 14px -2px rgba(251, 191, 36, 0.55); }
+}
+.jarvis-mode.is-reduced-motion .jarvis-approval-pill { animation: none; }
+@media (prefers-reduced-motion: reduce) { .jarvis-approval-pill { animation: none; } }
+
+/* Shortcuts help */
+.jarvis-shortcuts {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 31;
+  width: min(440px, calc(100% - 32px));
+  transform: translate(-50%, -50%);
+  border-radius: 12px;
+  border: 1px solid var(--jv-border-strong);
+  background: rgba(4, 9, 17, 0.97);
+  box-shadow: 0 0 60px -20px rgba(var(--jv-cyan), 0.35);
+}
 .jarvis-link-btn:hover { border-color: var(--jv-border-strong); background: rgba(var(--jv-cyan), 0.06); }
 :root {
   --background: oklch(1 0 0);

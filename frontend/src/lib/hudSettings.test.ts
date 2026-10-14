@@ -30,6 +30,13 @@ describe('HUD settings', () => {
     const { useHudSettings, HUD_DEFAULTS } = await import('./hudSettings');
     expect(useHudSettings.getState().hud.userName).toBe(HUD_DEFAULTS.userName);
     expect(useHudSettings.getState().hud.particles).toBe(true);
+    expect(useHudSettings.getState().hud.pushToTalk).toBe(true);
+  });
+
+  it('adds pushToTalk to settings saved before it existed', async () => {
+    storage.setItem('openjarvis-hud-settings', JSON.stringify({ userName: 'Braian' }));
+    const { loadHudSettings } = await import('./hudSettings');
+    expect(loadHudSettings()).toMatchObject({ userName: 'Braian', pushToTalk: true });
   });
 
   it('persists updates and reloads them', async () => {
