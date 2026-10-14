@@ -17,6 +17,7 @@ import {
   Loader2,
   ScrollText,
   Database,
+  Sparkles,
 } from 'lucide-react';
 import { ConversationList } from './ConversationList';
 import { useAppStore } from '../../lib/store';
@@ -45,15 +46,16 @@ export function Sidebar() {
   const handleNewChat = () => {
     // Don't create a new chat if the current one is empty
     if (messages.length === 0) {
-      navigate('/');
+      navigate('/chat');
       return;
     }
     createConversation(selectedModel);
-    navigate('/');
+    navigate('/chat');
   };
 
   const navItems = [
-    { path: '/', icon: MessageSquare, label: 'Chat' },
+    { path: '/', icon: Sparkles, label: 'JARVIS' },
+    { path: '/chat', icon: MessageSquare, label: 'Chat' },
     { path: '/dashboard', icon: BarChart3, label: 'Dashboard' },
     { path: '/data-sources', icon: Database, label: 'Data Sources' },
     { path: '/agents', icon: Bot, label: 'Agents' },

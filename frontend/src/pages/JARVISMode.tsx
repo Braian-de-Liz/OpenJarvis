@@ -1,7 +1,13 @@
 import { useRef, useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router';
+import { toast } from 'sonner';
 import { useAppStore } from '../lib/store';
 import { useVoiceEvents, type VoiceLogEntry } from '../lib/useVoiceEvents';
+import { apiFetch, checkHealth } from '../lib/api';
+import { sendChatTurn } from '../lib/chatTurn';
+import { useHudSettings } from '../lib/hudSettings';
+import { useSpeech } from '../hooks/useSpeech';
+import { useTts } from '../hooks/useTts';
 // Bundled locally so the HUD typography also works offline (Tauri).
 import '@fontsource/chakra-petch/500.css';
 import '@fontsource/chakra-petch/600.css';
@@ -9,7 +15,8 @@ import '@fontsource/ibm-plex-mono/400.css';
 import '@fontsource/ibm-plex-mono/500.css';
 import {
   Mic, MicOff, Volume2, Headphones, Cpu, HardDrive, Wifi, Activity, Terminal, X,
-  ChevronUp, ChevronDown, Power, Settings, Sparkles, Zap, Camera, Thermometer, Send,
+  ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
+  MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2,
 } from 'lucide-react';
 
 /**
@@ -67,6 +74,8 @@ function ArcReactor(props: {
   isListening: boolean;
   isSpeaking: boolean;
   audioLevel: number;
+  /** "Reduzir animações": slow spin, no particles. */
+  calm?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const sizeRef = useCanvasSize(canvasRef);
@@ -82,10 +91,10 @@ function ArcReactor(props: {
     let phase = 0;
 
     const draw = (timestamp: number) => {
-      const { isActive, isListening, isSpeaking, audioLevel } = propsRef.current;
+      const { isActive, isListening, isSpeaking, audioLevel, calm } = propsRef.current;
       const dt = last ? (timestamp - last) / 1000 : 0;
       last = timestamp;
-      phase += dt * (isSpeaking ? 3 : isListening ? 2 : 0.8);
+      phase += dt * (isSpeaking ? 3 : isListening ? 2 : 0.8) * (calm ? 0.25 : 1);
 
       const { w, h } = sizeRef.current;
       ctx.clearRect(0, 0, w, h);
@@ -174,7 +183,7 @@ function ArcReactor(props: {
       }
 
       // Energy particles
-      if (isActive) {
+      if (isActive && !calm) {
         for (let p = 0; p < 20; p++) {
           const a = (phase * 0.5 + p * 0.3) % (Math.PI * 2);
           const pr = maxRadius * (0.3 + Math.sin(p) * 0.2);
@@ -363,39 +372,54 @@ function HUDPanel({
 // gpu/temp are null when the host has no NVIDIA GPU (NVML unavailable).
 type Metrics = { cpu: number; gpu: number | null; ram: number; netUp: number; netDown: number; temp: number | null };
 
-function useSystemMetrics() {
-  const [metrics, setMetrics] = useState<Metrics>({ cpu: 20, gpu: 10, ram: 45, netUp: 0, netDown: 0, temp: 45 });
-  const [live, setLive] = useState(false);
+/** Polls host telemetry; `metrics` is null while the server can't provide it. */
+function useSystemMetrics(enabled: boolean) {
+  const [metrics, setMetrics] = useState<Metrics | null>(null);
 
   useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
     const update = async () => {
       try {
-        // Try to get real metrics from backend
-        const res = await fetch('/api/system/metrics');
+        // apiFetch adds the base URL and the API key, like every other panel.
+        const res = await apiFetch('/api/system/metrics');
         if (res.ok && res.headers.get('content-type')?.includes('json')) {
-          setMetrics(await res.json());
-          setLive(true);
+          const data = (await res.json()) as Metrics;
+          if (alive) setMetrics(data);
           return;
         }
       } catch {}
-
-      // Fallback: simulate realistic values (flagged as DEMO in the panel)
-      setLive(false);
-      setMetrics(prev => ({
-        cpu: Math.min(100, Math.max(0, prev.cpu + (Math.random() - 0.5) * 10)),
-        gpu: Math.min(100, Math.max(0, (prev.gpu ?? 10) + (Math.random() - 0.5) * 8)),
-        ram: Math.min(100, Math.max(0, prev.ram + (Math.random() - 0.5) * 3)),
-        netUp: Math.random() * 50,
-        netDown: Math.random() * 200,
-        temp: Math.min(90, Math.max(30, (prev.temp ?? 45) + (Math.random() - 0.5) * 4)),
-      }));
+      if (alive) setMetrics(null);
     };
     update();
     const interval = setInterval(update, 2000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, [enabled]);
 
-  return { metrics, live };
+  return metrics;
+}
+
+type ServerStatus = 'checking' | 'online' | 'offline';
+
+function useServerStatus(): ServerStatus {
+  const [status, setStatus] = useState<ServerStatus>('checking');
+  useEffect(() => {
+    let alive = true;
+    const probe = () =>
+      checkHealth()
+        .then((ok) => alive && setStatus(ok ? 'online' : 'offline'))
+        .catch(() => alive && setStatus('offline'));
+    probe();
+    const id = setInterval(probe, 10000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+  return status;
 }
 
 function MetricBar({ label, value, unit, max = 100, icon: Icon, color }: {
@@ -427,34 +451,39 @@ function MetricBar({ label, value, unit, max = 100, icon: Icon, color }: {
   );
 }
 
-function SystemMetrics({ metrics }: { metrics: Metrics }) {
+function SystemMetrics({ metrics }: { metrics: Metrics | null }) {
+  const m = metrics;
   return (
     <div className="space-y-3 jarvis-font-hud">
-      <MetricBar label="CPU" value={metrics.cpu} unit="%" icon={Cpu} color="#22d3ee" />
-      <MetricBar label="GPU" value={metrics.gpu} unit="%" icon={Activity} color="#a855f7" />
-      <MetricBar label="RAM" value={metrics.ram} unit="%" icon={HardDrive} color="#f59e0b" />
-      <MetricBar label="TEMP GPU" value={metrics.temp} unit="°C" icon={Thermometer} color="#f43f5e" />
+      <MetricBar label="CPU" value={m ? m.cpu : null} unit="%" icon={Cpu} color="#22d3ee" />
+      <MetricBar label="GPU" value={m ? m.gpu : null} unit="%" icon={Activity} color="#a855f7" />
+      <MetricBar label="RAM" value={m ? m.ram : null} unit="%" icon={HardDrive} color="#f59e0b" />
+      <MetricBar label="TEMP GPU" value={m ? m.temp : null} unit="°C" icon={Thermometer} color="#f43f5e" />
       <div className="grid grid-cols-2 gap-2 pt-1">
         {[
-          { label: 'UP', value: metrics.netUp },
-          { label: 'DOWN', value: metrics.netDown },
+          { label: 'UP', value: m ? m.netUp : null },
+          { label: 'DOWN', value: m ? m.netDown : null },
         ].map((n) => (
           <div key={n.label} className="jarvis-tile">
             <span className="flex items-center gap-1 text-zinc-500 text-[10px] tracking-wider">
               <Wifi size={11} /> {n.label}
             </span>
             <span className="text-cyan-200 text-xs tabular-nums">
-              {n.value.toFixed(1)} <span className="text-zinc-500">Mb/s</span>
+              {n.value === null ? <span className="text-zinc-500">—</span> : n.value.toFixed(1)}{' '}
+              <span className="text-zinc-500">Mb/s</span>
             </span>
           </div>
         ))}
       </div>
+      {m && m.gpu === null && (
+        <p className="text-[10px] text-zinc-500">GPU NVIDIA não detectada — GPU e temperatura indisponíveis.</p>
+      )}
     </div>
   );
 }
 
 // ─── Terminal Chat Log ───
-function TerminalChat({ voiceLog = [] }: { voiceLog?: VoiceLogEntry[] }) {
+function TerminalChat({ voiceLog = [], userName }: { voiceLog?: VoiceLogEntry[]; userName: string }) {
   const messages = useAppStore(s => s.messages);
   const streamState = useAppStore(s => s.streamState);
   const isStreaming = streamState.isStreaming;
@@ -493,7 +522,7 @@ function TerminalChat({ voiceLog = [] }: { voiceLog?: VoiceLogEntry[] }) {
       {entries.length === 0 && !isStreaming ? (
         <div className="h-full flex flex-col items-center justify-center text-center gap-2 py-6">
           <p className="jarvis-font-display text-cyan-400/70 text-sm tracking-[0.3em]">JARVIS ONLINE</p>
-          <p className="text-[11px] text-zinc-500">Aguardando comando, sir.</p>
+          <p className="text-[11px] text-zinc-500">Aguardando comando, {userName}.</p>
           <div className="mt-2 flex flex-wrap justify-center gap-1.5">
             {['"Aumente o volume"', '"Feche o Chrome"', '"Print da tela"'].map((s) => (
               <kbd key={s} className="jarvis-chip">{s}</kbd>
@@ -512,7 +541,7 @@ function TerminalChat({ voiceLog = [] }: { voiceLog?: VoiceLogEntry[] }) {
             <div key={msg.id} className={`terminal-message ${msg.role === 'user' ? 'is-user' : 'is-jarvis'}`}>
               <div className="flex items-baseline gap-2 text-[10px] tracking-wider">
                 <span className={msg.role === 'user' ? 'text-amber-400' : 'text-cyan-400'}>
-                  {msg.role === 'user' ? 'SIR' : 'JARVIS'}
+                  {msg.role === 'user' ? userName.toUpperCase() : 'JARVIS'}
                 </span>
                 <span className="text-zinc-600">{formatTime(msg.timestamp)}</span>
               </div>
@@ -549,81 +578,107 @@ function useClock() {
 // ─── Main JARVIS Mode Page ───
 export function JARVISMode() {
   const navigate = useNavigate();
-  // Manual demo toggles (buttons); real state comes from the voice relay.
-  const [demoListening, setIsListening] = useState(false);
-  const [demoSpeaking, setIsSpeaking] = useState(false);
-  const [demoLevel, setAudioLevel] = useState(0);
+  const hud = useHudSettings((s) => s.hud);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   const voice = useVoiceEvents();
+  const speech = useSpeech();
+  const tts = useTts();
+  const settings = useAppStore((s) => s.settings);
+  const selectedModel = useAppStore((s) => s.selectedModel);
+  const serverInfo = useAppStore((s) => s.serverInfo);
+  const streamState = useAppStore((s) => s.streamState);
+  const activeId = useAppStore((s) => s.activeId);
+  const serverStatus = useServerStatus();
+  const metrics = useSystemMetrics(hud.showTelemetry);
+  const now = useClock();
+
+  // Two voice sources: the hands-free CLI loop (relayed over WebSocket) and
+  // the browser mic/speaker driven from this page.
   const voiceListening = voice.state === 'listening';
   const voiceSpeaking = voice.state === 'speaking';
   const voiceThinking = voice.state === 'thinking' || voice.state === 'transcribing';
   const voiceSessionActive = !['idle', 'ended'].includes(voice.state);
+  const browserRecording = speech.state === 'recording';
+  const browserTranscribing = speech.state === 'transcribing';
 
-  const isListening = voiceListening || demoListening;
-  const isSpeaking = voiceSpeaking || demoSpeaking;
-  const audioLevel = voiceListening || voiceSpeaking ? voice.level : demoLevel;
-
-  const streamState = useAppStore(s => s.streamState);
-  const sendMessage = useAppStore(s => s.addMessage);
-  const activeId = useAppStore(s => s.activeId);
-  const createConversation = useAppStore(s => s.createConversation);
-
-  const isStreaming = streamState.isStreaming || voiceThinking;
+  const isListening = voiceListening || browserRecording;
+  const isSpeaking = voiceSpeaking || tts.isSpeaking;
+  const chatStreaming = streamState.isStreaming;
+  const isStreaming = chatStreaming || voiceThinking || browserTranscribing || tts.isLoading;
   const isActive = activeId !== null || voiceSessionActive;
-  const { metrics, live: metricsLive } = useSystemMetrics();
-  const now = useClock();
+  // The browser paths have no level meter; a steady mid level keeps the
+  // waveform alive (it already modulates per bar).
+  const audioLevel = voiceListening || voiceSpeaking
+    ? voice.level
+    : browserRecording || tts.isSpeaking ? 0.55 : 0;
 
-  // Simulated level only for the manual demo buttons.
+  const micEnabled = settings.speechEnabled && speech.available;
+  const ttsEnabled = settings.voiceOutputEnabled && tts.available;
+
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (demoListening || demoSpeaking) {
-      interval = setInterval(() => {
-        setAudioLevel(0.1 + Math.random() * 0.9);
-      }, 50);
-    } else {
-      setAudioLevel(0);
-    }
-    return () => clearInterval(interval);
-  }, [demoListening, demoSpeaking]);
+    if (speech.error) toast.error(speech.error, { duration: 6000 });
+  }, [speech.error]);
+  useEffect(() => {
+    if (tts.error) toast.error(`Voz: ${tts.error}`, { duration: 6000 });
+  }, [tts.error]);
 
-  // Esc leaves JARVIS mode.
+  // Esc closes the settings drawer (the HUD is the home screen; no "exit").
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') navigate('/');
+      if (e.key === 'Escape') setSettingsOpen(false);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [navigate]);
+  }, []);
 
   const handleSendMessage = useCallback(async (text: string) => {
     if (!text.trim()) return;
-    let conversationId = activeId;
-    if (!conversationId) {
-      conversationId = createConversation();
-      useAppStore.getState().selectConversation(conversationId);
+    if (!useAppStore.getState().selectedModel) {
+      toast.error('Nenhum modelo selecionado — escolha um nas configurações do HUD.');
+      setSettingsOpen(true);
+      return;
     }
-    sendMessage(conversationId, {
-      id: Date.now().toString(),
-      role: 'user',
-      content: text,
-      timestamp: Date.now(),
-    });
-    // Trigger backend streaming - would connect to actual API
-  }, [activeId, createConversation, sendMessage]);
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const result = await sendChatTurn(text, controller.signal);
+    abortRef.current = null;
+    if (!result || result.aborted || result.content.startsWith('Error:')) return;
 
-  const handleVoiceToggle = () => {
-    if (demoListening) {
-      setIsListening(false);
-    } else {
-      setIsListening(true);
-      setTimeout(() => setIsListening(false), 5000);
+    const { voiceOutputEnabled, voiceAutoplay } = useAppStore.getState().settings;
+    if (voiceOutputEnabled && voiceAutoplay) {
+      const msgs = useAppStore.getState().messages;
+      const last = msgs[msgs.length - 1];
+      void tts.speak(last?.id ?? `hud-${Date.now()}`, result.content);
     }
+  }, [tts]);
+
+  const handleStop = () => {
+    abortRef.current?.abort();
+    tts.stop();
+  };
+
+  const handleMic = async () => {
+    if (browserRecording) {
+      try {
+        const text = await speech.stopRecording();
+        if (text.trim()) await handleSendMessage(text);
+      } catch {
+        // useSpeech surfaces the error (toast above)
+      }
+      return;
+    }
+    tts.stop();
+    await speech.startRecording();
   };
 
   const handleSpeakTest = () => {
-    setIsSpeaking(true);
-    setTimeout(() => setIsSpeaking(false), 3000);
+    if (tts.isSpeaking || tts.isLoading) {
+      tts.stop();
+      return;
+    }
+    void tts.speak('hud-voice-test', `Olá, ${hud.userName}. Todos os sistemas operacionais.`);
   };
 
   const statusLabel = isListening
@@ -634,56 +689,80 @@ export function JARVISMode() {
         ? 'PROCESSANDO'
         : voice.state === 'activated'
           ? 'ATIVANDO'
-          : 'PRONTO';
+          : serverStatus === 'offline'
+            ? 'SERVIDOR OFFLINE'
+            : 'PRONTO';
 
+  const activeTool = voice.activeTool || (chatStreaming ? streamState.activeToolCalls.find((t) => t.status === 'running')?.tool : null);
   const coreLabel = isListening
     ? 'MICROFONE ATIVO'
     : isSpeaking
       ? 'SÍNTESE DE VOZ'
-      : voice.activeTool
-        ? `EXECUTANDO: ${voice.activeTool}`
-        : isStreaming
-          ? 'PROCESSANDO REQUISIÇÃO'
-          : 'SISTEMA OPERACIONAL';
+      : activeTool
+        ? `EXECUTANDO: ${activeTool}`
+        : browserTranscribing
+          ? 'TRANSCREVENDO'
+          : isStreaming
+            ? 'PROCESSANDO REQUISIÇÃO'
+            : 'SISTEMA OPERACIONAL';
 
-  const coreHint = isListening
-    ? 'Diga seu comando… ("Jarvis, desligar" encerra)'
-    : voiceSessionActive
-      ? 'Sessão de voz ativa'
-      : 'Bata duas palmas ou digite um comando';
+  const coreHint = browserRecording
+    ? 'Fale agora — clique em "Enviar fala" quando terminar'
+    : voiceListening
+      ? 'Diga seu comando… ("Jarvis, desligar" encerra)'
+      : voiceSessionActive
+        ? 'Sessão de voz ativa'
+        : micEnabled
+          ? 'Bata duas palmas, use o microfone ou digite um comando'
+          : 'Bata duas palmas ou digite um comando';
+
+  const micTitle = !settings.speechEnabled
+    ? 'Entrada por voz desativada nas configurações'
+    : !speech.available
+      ? 'Sem backend de transcrição no servidor (uv sync --extra speech)'
+      : browserRecording
+        ? 'Parar e enviar'
+        : 'Falar com o JARVIS pelo microfone do navegador';
 
   return (
-    <div className="jarvis-mode fixed inset-0 z-50 flex flex-col overflow-hidden text-zinc-300">
+    <div className={`jarvis-mode fixed inset-0 z-50 flex flex-col overflow-hidden text-zinc-300 ${hud.reducedMotion ? 'is-reduced-motion' : ''}`}>
       {/* Background layers */}
       <div className="jarvis-bg absolute inset-0 pointer-events-none" aria-hidden="true" />
       <div className="jarvis-grid-bg absolute inset-0 pointer-events-none" aria-hidden="true" />
-      <ParticleField count={30} />
-      <div className="jarvis-scanlines absolute inset-0 pointer-events-none" aria-hidden="true" />
+      {hud.particles && !hud.reducedMotion && <ParticleField count={30} />}
+      {hud.scanlines && <div className="jarvis-scanlines absolute inset-0 pointer-events-none" aria-hidden="true" />}
       <div className="jarvis-vignette absolute inset-0 pointer-events-none" aria-hidden="true" />
 
       {/* Top Status Bar */}
       <header className="jarvis-topbar relative z-10 shrink-0">
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <div className="jarvis-pill">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+            <span className={`w-2 h-2 rounded-full ${serverStatus === 'offline' ? 'bg-rose-500' : 'bg-emerald-400 animate-pulse'}`} />
             <span className="jarvis-font-display text-cyan-200 tracking-[0.25em]">J.A.R.V.I.S.</span>
-            <span className="text-zinc-500">v1.0</span>
           </div>
           <div className="jarvis-pill">
             <span className="text-zinc-500">STATUS</span>
-            <span className={isSpeaking || isStreaming ? 'text-purple-300' : 'text-cyan-300'}>{statusLabel}</span>
+            <span className={serverStatus === 'offline' && !isStreaming ? 'text-rose-300' : isSpeaking || isStreaming ? 'text-purple-300' : 'text-cyan-300'}>{statusLabel}</span>
           </div>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            className="jarvis-pill hidden md:flex hover:border-cyan-400/40"
+            title="Trocar modelo"
+          >
+            <span className="text-zinc-500">MODELO</span>
+            <span className={`truncate max-w-[14rem] ${selectedModel ? 'text-cyan-200' : 'text-amber-300'}`}>
+              {selectedModel || 'NENHUM'}
+            </span>
+          </button>
           <div
-            className="jarvis-pill hidden md:flex"
+            className="jarvis-pill hidden lg:flex"
             title={voice.connected ? 'Conectado ao relay de voz (/v1/voice/ws)' : 'Sem conexão com jarvis serve'}
           >
             <span className={`w-1.5 h-1.5 rounded-full ${voice.connected ? 'bg-cyan-400' : 'bg-rose-500'}`} />
             <span className={voice.connected ? 'text-cyan-300' : 'text-rose-300'}>
               {voice.connected ? 'VOZ LINK' : 'VOZ OFFLINE'}
             </span>
-            {voice.model && (
-              <span className="text-zinc-500 truncate max-w-[14rem]">· {voice.engine}/{voice.model}</span>
-            )}
           </div>
         </div>
         <div className="flex items-center gap-2 sm:gap-3 shrink-0">
@@ -692,8 +771,8 @@ export function JARVISMode() {
             <span className="text-cyan-200 tabular-nums">{now.toLocaleTimeString('pt-BR', { hour12: false })}</span>
           </div>
           <div className="jarvis-pill hidden xl:flex">
-            <span className="text-zinc-500">SIR</span>
-            <span className="text-cyan-200">Tony Stark</span>
+            <span className="text-zinc-500">USUÁRIO</span>
+            <span className="text-cyan-200 truncate max-w-[10rem]">{hud.userName}</span>
           </div>
           <div className="hidden sm:block w-24 h-1.5 rounded-full bg-zinc-900/60 border border-cyan-500/15 overflow-hidden" title="Nível de áudio">
             <div
@@ -701,8 +780,11 @@ export function JARVISMode() {
               style={{ width: `${audioLevel * 100}%`, background: 'linear-gradient(90deg, #22d3ee, #a855f7)' }}
             />
           </div>
-          <button onClick={() => navigate('/')} className="jarvis-icon-btn jarvis-exit" title="Sair do modo JARVIS (Esc)" aria-label="Sair do modo JARVIS">
-            <Power size={15} />
+          <button onClick={() => navigate('/chat')} className="jarvis-icon-btn" title="Interface clássica (chat, agentes, dashboard)" aria-label="Abrir interface clássica">
+            <MessageSquare size={15} />
+          </button>
+          <button onClick={() => setSettingsOpen(true)} className="jarvis-icon-btn" title="Configurações do HUD" aria-label="Configurações do HUD">
+            <Settings size={15} />
           </button>
         </div>
       </header>
@@ -711,17 +793,19 @@ export function JARVISMode() {
       <main className="jarvis-grid relative z-10 flex-1 min-h-0">
         {/* Left column */}
         <div className="jarvis-col order-2 lg:order-1">
-          <HUDPanel
-            title="Telemetria"
-            icon={<Cpu size={14} />}
-            badge={metricsLive ? undefined : 'DEMO'}
-            code="SYS·01"
-            collapsible
-          >
-            <SystemMetrics metrics={metrics} />
-          </HUDPanel>
+          {hud.showTelemetry && (
+            <HUDPanel
+              title="Telemetria"
+              icon={<Cpu size={14} />}
+              badge={metrics ? undefined : 'OFFLINE'}
+              code="SYS·01"
+              collapsible
+            >
+              <SystemMetrics metrics={metrics} />
+            </HUDPanel>
+          )}
           <HUDPanel title="Log de Comunicação" icon={<Terminal size={14} />} code="COM·02" collapsible grow className="h-80 lg:h-auto">
-            <TerminalChat voiceLog={voice.log} />
+            <TerminalChat voiceLog={voice.log} userName={hud.userName} />
           </HUDPanel>
         </div>
 
@@ -734,6 +818,7 @@ export function JARVISMode() {
               isListening={isListening}
               isSpeaking={isSpeaking || isStreaming}
               audioLevel={audioLevel}
+              calm={hud.reducedMotion}
             />
           </div>
 
@@ -752,36 +837,67 @@ export function JARVISMode() {
 
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button
-              onClick={handleVoiceToggle}
-              className={`jarvis-voice-btn ${isListening ? 'is-on-cyan' : ''}`}
-              aria-pressed={isListening}
+              onClick={handleMic}
+              disabled={!micEnabled || browserTranscribing || chatStreaming}
+              className={`jarvis-voice-btn ${browserRecording ? 'is-on-cyan' : ''} disabled:opacity-40 disabled:cursor-not-allowed`}
+              aria-pressed={browserRecording}
+              title={micTitle}
             >
-              {isListening ? <MicOff size={14} /> : <Mic size={14} />}
-              {isListening ? 'Parar escuta' : 'Iniciar escuta'}
+              {browserTranscribing ? <Loader2 size={14} className="animate-spin" /> : browserRecording ? <Send size={14} /> : <Mic size={14} />}
+              {browserTranscribing ? 'Transcrevendo…' : browserRecording ? 'Enviar fala' : 'Falar'}
             </button>
-            <button
-              onClick={handleSpeakTest}
-              className={`jarvis-voice-btn ${isSpeaking ? 'is-on-purple' : ''}`}
-              aria-pressed={isSpeaking}
-            >
-              <Volume2 size={14} />
-              Testar voz
-            </button>
+            {chatStreaming || tts.isSpeaking || tts.isLoading ? (
+              <button onClick={handleStop} className="jarvis-voice-btn is-on-purple">
+                <Square size={13} />
+                Interromper
+              </button>
+            ) : (
+              <button
+                onClick={handleSpeakTest}
+                disabled={!ttsEnabled}
+                className="jarvis-voice-btn disabled:opacity-40 disabled:cursor-not-allowed"
+                title={ttsEnabled ? 'Ouvir a voz do JARVIS' : 'Saída de voz desativada ou sem backend de TTS'}
+              >
+                <Volume2 size={14} />
+                Testar voz
+              </button>
+            )}
           </div>
         </section>
 
         {/* Right column */}
         <div className="jarvis-col order-3">
-          <HUDPanel title="Controles" icon={<Settings size={14} />} badge="DEMO" code="CTL·03" collapsible>
+          <HUDPanel title="Status" icon={<Server size={14} />} code="CTL·03" collapsible>
             <div className="space-y-1.5 jarvis-font-hud text-[11px]">
-              <SystemControlRow label="VOLUME" value="50%" icon={Volume2} />
-              <SystemControlRow label="BRILHO" value="75%" icon={Activity} />
-              <SystemControlRow label="REDE" value="CONECTADO" icon={Wifi} status="online" />
-              <SystemControlRow label="ENERGIA" value="AC" icon={Zap} />
+              <SystemControlRow
+                label="SERVIDOR"
+                value={serverStatus === 'checking' ? '…' : serverStatus === 'online' ? 'ONLINE' : 'OFFLINE'}
+                icon={Server}
+                status={serverStatus === 'online' ? 'online' : serverStatus === 'offline' ? 'offline' : undefined}
+              />
+              <SystemControlRow label="ENGINE" value={(serverInfo?.engine || '—').toUpperCase()} icon={Cpu} />
+              <SystemControlRow
+                label="TRANSCRIÇÃO"
+                value={!settings.speechEnabled ? 'DESLIGADA' : speech.available ? 'PRONTA' : 'INDISPONÍVEL'}
+                icon={Mic}
+                status={!settings.speechEnabled ? undefined : speech.available ? 'online' : 'warning'}
+              />
+              <SystemControlRow
+                label="VOZ (TTS)"
+                value={!settings.voiceOutputEnabled ? 'DESLIGADA' : tts.available ? 'PRONTA' : 'INDISPONÍVEL'}
+                icon={Volume2}
+                status={!settings.voiceOutputEnabled ? undefined : tts.available ? 'online' : 'warning'}
+              />
+              <SystemControlRow
+                label="RELAY DE VOZ"
+                value={voice.connected ? 'CONECTADO' : 'DESCONECTADO'}
+                icon={Wifi}
+                status={voice.connected ? 'online' : 'offline'}
+              />
             </div>
           </HUDPanel>
           <HUDPanel title="Ações Rápidas" icon={<Sparkles size={14} />} code="ACT·04" collapsible>
-            <QuickActions onAction={handleSendMessage} />
+            <QuickActions onAction={handleSendMessage} disabled={chatStreaming} />
           </HUDPanel>
         </div>
       </main>
@@ -791,12 +907,208 @@ export function JARVISMode() {
         <div className="max-w-3xl mx-auto">
           <JARVISInputBar
             onSend={handleSendMessage}
-            disabled={isStreaming}
-            placeholder={isStreaming ? 'Processando…' : isListening ? 'Escutando…' : 'Comando de voz ou texto, sir…'}
+            onStop={handleStop}
+            streaming={chatStreaming}
+            placeholder={chatStreaming ? 'Processando…' : isListening ? 'Escutando…' : `Comando de voz ou texto, ${hud.userName}…`}
           />
         </div>
       </footer>
+
+      {settingsOpen && <HUDSettingsDrawer onClose={() => setSettingsOpen(false)} />}
     </div>
+  );
+}
+
+// ─── Settings Drawer ───
+
+function Toggle({ label, hint, checked, onChange, disabled = false }: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-disabled={disabled}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className="jarvis-toggle w-full"
+    >
+      <span className="text-left">
+        <span className="block">{label}</span>
+        {hint && <span className="jarvis-field-hint">{hint}</span>}
+      </span>
+      <span className={`jarvis-switch ${checked ? 'is-on' : ''}`} aria-hidden="true" />
+    </button>
+  );
+}
+
+function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
+  const navigate = useNavigate();
+  const { hud, updateHud, resetHud } = useHudSettings();
+  const settings = useAppStore((s) => s.settings);
+  const updateSettings = useAppStore((s) => s.updateSettings);
+  const models = useAppStore((s) => s.models);
+  const modelsLoading = useAppStore((s) => s.modelsLoading);
+  const selectedModel = useAppStore((s) => s.selectedModel);
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const isStreaming = useAppStore((s) => s.streamState.isStreaming);
+  const [name, setName] = useState(hud.userName);
+
+  const commitName = () => {
+    const trimmed = name.trim();
+    updateHud({ userName: trimmed || 'Sir' });
+    if (!trimmed) setName('Sir');
+  };
+
+  return (
+    <>
+      <div className="jarvis-drawer-backdrop" onClick={onClose} aria-hidden="true" />
+      <aside className="jarvis-drawer" role="dialog" aria-modal="true" aria-label="Configurações do HUD">
+        <header className="jarvis-hud-panel-head">
+          <div className="flex items-center gap-2">
+            <SlidersHorizontal size={14} className="text-cyan-400" />
+            <h3>Configurações</h3>
+          </div>
+          <button onClick={onClose} className="jarvis-icon-btn" aria-label="Fechar configurações" title="Fechar (Esc)">
+            <X size={14} />
+          </button>
+        </header>
+
+        <div className="jarvis-drawer-body">
+          <section className="jarvis-drawer-section">
+            <h4>Identidade</h4>
+            <label className="jarvis-field">
+              Como o JARVIS deve te chamar
+              <input
+                className="jarvis-field-input"
+                value={name}
+                maxLength={40}
+                onChange={(e) => setName(e.target.value)}
+                onBlur={commitName}
+                onKeyDown={(e) => e.key === 'Enter' && commitName()}
+                placeholder="Sir"
+              />
+            </label>
+          </section>
+
+          <section className="jarvis-drawer-section">
+            <h4>Modelo</h4>
+            <label className="jarvis-field">
+              Modelo de linguagem
+              <select
+                className="jarvis-field-input"
+                value={selectedModel}
+                disabled={isStreaming || modelsLoading || models.length === 0}
+                onChange={(e) => {
+                  setSelectedModel(e.target.value);
+                  updateSettings({ defaultModel: e.target.value });
+                }}
+              >
+                {!selectedModel && <option value="">— selecione —</option>}
+                {models.map((m) => (
+                  <option key={m.id} value={m.id}>{m.id}</option>
+                ))}
+              </select>
+              <span className="jarvis-field-hint">
+                {modelsLoading
+                  ? 'Carregando modelos…'
+                  : models.length === 0
+                    ? 'Nenhum modelo disponível — verifique o servidor/engine.'
+                    : 'Fica salvo como padrão.'}
+              </span>
+            </label>
+            <label className="jarvis-field">
+              Criatividade (temperatura): {settings.temperature.toFixed(1)}
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.1}
+                value={settings.temperature}
+                onChange={(e) => updateSettings({ temperature: Number(e.target.value) })}
+                className="accent-cyan-400"
+              />
+            </label>
+            <label className="jarvis-field">
+              Tamanho máximo da resposta (tokens)
+              <input
+                type="number"
+                min={64}
+                max={131072}
+                step={64}
+                className="jarvis-field-input"
+                value={settings.maxTokens}
+                onChange={(e) => {
+                  const v = Math.round(Number(e.target.value));
+                  if (Number.isFinite(v) && v >= 64) updateSettings({ maxTokens: v });
+                }}
+              />
+            </label>
+          </section>
+
+          <section className="jarvis-drawer-section">
+            <h4>Voz</h4>
+            <Toggle
+              label="Entrada por voz (microfone do navegador)"
+              checked={settings.speechEnabled}
+              onChange={(v) => updateSettings({ speechEnabled: v })}
+            />
+            <Toggle
+              label="Saída de voz (TTS)"
+              checked={settings.voiceOutputEnabled}
+              onChange={(v) => updateSettings({ voiceOutputEnabled: v })}
+            />
+            <Toggle
+              label="Ler respostas em voz alta automaticamente"
+              hint="Respostas a comandos digitados ou falados no HUD"
+              checked={settings.voiceOutputEnabled && settings.voiceAutoplay}
+              disabled={!settings.voiceOutputEnabled}
+              onChange={(v) => updateSettings({ voiceAutoplay: v })}
+            />
+            <p className="jarvis-field-hint mt-2">
+              Ativação por palmas e sessão mãos-livres: rode <code className="text-cyan-300">jarvis show</code> no terminal.
+            </p>
+          </section>
+
+          <section className="jarvis-drawer-section">
+            <h4>Visual</h4>
+            <Toggle label="Painel de telemetria" checked={hud.showTelemetry} onChange={(v) => updateHud({ showTelemetry: v })} />
+            <Toggle label="Partículas de fundo" checked={hud.particles} disabled={hud.reducedMotion} onChange={(v) => updateHud({ particles: v })} />
+            <Toggle label="Scanlines" checked={hud.scanlines} onChange={(v) => updateHud({ scanlines: v })} />
+            <Toggle
+              label="Reduzir animações"
+              hint="Mais leve em máquinas modestas"
+              checked={hud.reducedMotion}
+              onChange={(v) => updateHud({ reducedMotion: v })}
+            />
+          </section>
+
+          <section className="jarvis-drawer-section">
+            <h4>Mais</h4>
+            <button className="jarvis-link-btn" onClick={() => navigate('/chat')}>
+              <MessageSquare size={13} /> Interface clássica (chat)
+            </button>
+            <button className="jarvis-link-btn" onClick={() => navigate('/settings')}>
+              <Settings size={13} /> Configurações avançadas (servidor, API key, tema)
+            </button>
+            <button
+              className="jarvis-link-btn"
+              onClick={() => {
+                resetHud();
+                setName('Sir');
+              }}
+            >
+              <RotateCcw size={13} /> Restaurar padrões do HUD
+            </button>
+          </section>
+        </div>
+      </aside>
+    </>
   );
 }
 
@@ -819,15 +1131,15 @@ function SystemControlRow({ label, value, icon: Icon, status }: {
         <Icon size={12} className="text-cyan-400/70" />
         {label}
       </div>
-      <div className="flex items-center gap-2">
-        <span className="text-cyan-200 tabular-nums">{value}</span>
-        {status && <span className={`w-1.5 h-1.5 rounded-full ${statusColors[status]}`} />}
+      <div className="flex items-center gap-2 min-w-0">
+        <span className="text-cyan-200 tabular-nums truncate">{value}</span>
+        {status && <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusColors[status]}`} />}
       </div>
     </div>
   );
 }
 
-function QuickActions({ onAction }: { onAction: (text: string) => void }) {
+function QuickActions({ onAction, disabled }: { onAction: (text: string) => void; disabled: boolean }) {
   const actions = [
     { label: 'Volume 80%', cmd: 'Aumente o volume para 80%', icon: Volume2 },
     { label: 'Fechar Chrome', cmd: 'Feche o Google Chrome', icon: X },
@@ -840,7 +1152,13 @@ function QuickActions({ onAction }: { onAction: (text: string) => void }) {
   return (
     <div className="grid grid-cols-2 gap-2">
       {actions.map((a) => (
-        <button key={a.label} onClick={() => onAction(a.cmd)} className="jarvis-quick-btn group" title={a.cmd}>
+        <button
+          key={a.label}
+          onClick={() => onAction(a.cmd)}
+          disabled={disabled}
+          className="jarvis-quick-btn group disabled:opacity-40 disabled:cursor-not-allowed"
+          title={a.cmd}
+        >
           <a.icon size={13} className="shrink-0 text-cyan-400/80 group-hover:text-cyan-300 transition-colors" />
           <span className="truncate">{a.label}</span>
         </button>
@@ -849,14 +1167,15 @@ function QuickActions({ onAction }: { onAction: (text: string) => void }) {
   );
 }
 
-function JARVISInputBar({ onSend, disabled, placeholder }: {
+function JARVISInputBar({ onSend, onStop, streaming, placeholder }: {
   onSend: (text: string) => void;
-  disabled: boolean;
+  onStop: () => void;
+  streaming: boolean;
   placeholder: string;
 }) {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
-  const canSend = !!text.trim() && !disabled;
+  const canSend = !!text.trim() && !streaming;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -875,15 +1194,20 @@ function JARVISInputBar({ onSend, disabled, placeholder }: {
         type="text"
         value={text}
         onChange={(e) => setText(e.target.value)}
-        disabled={disabled}
         placeholder={placeholder}
         className="jarvis-input"
         aria-label="Comando para o JARVIS"
         autoFocus
       />
-      <button type="submit" disabled={!canSend} className="jarvis-send-btn" aria-label="Enviar comando">
-        <Send size={14} />
-      </button>
+      {streaming ? (
+        <button type="button" onClick={onStop} className="jarvis-send-btn" aria-label="Interromper resposta" title="Interromper">
+          <Square size={13} />
+        </button>
+      ) : (
+        <button type="submit" disabled={!canSend} className="jarvis-send-btn" aria-label="Enviar comando">
+          <Send size={14} />
+        </button>
+      )}
     </form>
   );
 }

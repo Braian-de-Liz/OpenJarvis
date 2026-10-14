@@ -183,10 +183,12 @@ export default function App() {
     <>
       <UpdateChecker />
       <Routes>
-        {/* Full-screen HUD: outside Layout so the sidebar and bell can't overlap it */}
+        {/* Full-screen HUD is the home screen; outside Layout so the sidebar
+            and bell can't overlap it. /jarvis stays as an alias (jarvis show). */}
+        <Route index element={<JARVISMode />} />
         <Route path="jarvis" element={<JARVISMode />} />
         <Route element={<Layout />}>
-          <Route index element={<ChatPage />} />
+          <Route path="chat" element={<ChatPage />} />
           <Route path="dashboard" element={<DashboardPage />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="get-started" element={<GetStartedPage />} />
