@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+**JARVIS mode** — a full-screen HUD at `/jarvis` driven by a hands-free voice
+loop. `jarvis show` listens for a double clap, opens the HUD and starts a voice
+chat; `jarvis chat --hands-free` runs the loop directly. The CLI relays its
+state (listening, transcribing, thinking, speaking) to the server via
+`POST /v1/voice/events`, and the HUD subscribes over `/v1/voice/ws`; both sit
+behind the usual API-key auth. A new `/api/system/metrics` route feeds the HUD
+live CPU, RAM, network and GPU telemetry. Kokoro Portuguese (`p*`) voices now
+work with a stock espeak-ng install. See `docs/user-guide/jarvis-mode.md`.
+
 **Apple Foundation Models (AFM 3)** — a new in-process `afm` engine drives
 Apple's `apple-fm-sdk` directly, with no HTTP hop and no second process whose
 CPU draw would land inside the same energy measurement window. Install with
