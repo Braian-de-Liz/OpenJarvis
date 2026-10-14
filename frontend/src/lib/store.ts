@@ -94,9 +94,11 @@ function saveConversations(store: ConversationStore): void {
 // 'jarvis' = the HUD look (dark, cyan/purple, HUD fonts) for the classic UI.
 export type ThemeMode = 'light' | 'dark' | 'system' | 'jarvis';
 
-// One-time switch of untouched installs ('system') to the JARVIS theme when
-// the HUD became the home screen. Explicit light/dark choices are kept.
-const THEME_MIGRATION_KEY = 'openjarvis-theme-jarvis-default';
+// One-time switch to the JARVIS theme when the HUD became the home screen.
+// 'system' and 'dark' move (JARVIS is the dark look now); 'light' is kept.
+// v2: v1 only moved 'system', which left dark users on the old look.
+const THEME_MIGRATION_KEY = 'openjarvis-theme-jarvis-default-v2';
+const THEMES_MIGRATED_TO_JARVIS: ReadonlySet<string> = new Set(['system', 'dark']);
 
 interface Settings {
   theme: ThemeMode;
@@ -134,7 +136,7 @@ function loadSettings(): Settings {
     const settings: Settings = raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
     if (!localStorage.getItem(THEME_MIGRATION_KEY)) {
       localStorage.setItem(THEME_MIGRATION_KEY, '1');
-      if (settings.theme === 'system') {
+      if (THEMES_MIGRATED_TO_JARVIS.has(settings.theme)) {
         settings.theme = 'jarvis';
         saveSettings(settings);
       }

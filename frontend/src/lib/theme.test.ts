@@ -56,7 +56,17 @@ describe('JARVIS default theme', () => {
     expect(await loadTheme()).toBe('system');
   });
 
-  it('keeps an explicit light or dark choice', async () => {
+  it('moves dark installs to JARVIS once, even if the v1 migration already ran', async () => {
+    storage.setItem('openjarvis-theme-jarvis-default', '1');
+    storage.setItem('openjarvis-settings', JSON.stringify({ theme: 'dark' }));
+    expect(await loadTheme()).toBe('jarvis');
+
+    storage.setItem('openjarvis-settings', JSON.stringify({ theme: 'dark' }));
+    vi.resetModules();
+    expect(await loadTheme()).toBe('dark');
+  });
+
+  it('keeps an explicit light choice', async () => {
     storage.setItem('openjarvis-settings', JSON.stringify({ theme: 'light' }));
     expect(await loadTheme()).toBe('light');
   });
