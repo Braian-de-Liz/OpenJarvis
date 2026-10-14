@@ -7,6 +7,7 @@ import {
   Info,
   Check,
   Sun,
+  Sparkles,
   Moon,
   Monitor,
   Download,
@@ -280,6 +281,7 @@ export function MemoryStatusRow({
 }
 
 const themeOptions: { value: ThemeMode; label: string; icon: typeof Sun }[] = [
+  { value: 'jarvis', label: 'JARVIS', icon: Sparkles },
   { value: 'light', label: 'Light', icon: Sun },
   { value: 'dark', label: 'Dark', icon: Moon },
   { value: 'system', label: 'System', icon: Monitor },

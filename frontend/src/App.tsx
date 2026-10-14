@@ -17,6 +17,7 @@ import { fetchModels, fetchServerInfo, fetchSavings, submitSavings, isTauri } fr
 import { OptInModal } from './components/OptInModal';
 import { UpdateChecker } from './components/Desktop/UpdateChecker';
 import { track, hashId } from './lib/analytics';
+import { applyTheme } from './lib/theme';
 
 export default function App() {
   const [setupDone, setSetupDone] = useState(!isTauri());
@@ -50,10 +51,7 @@ export default function App() {
 
   // Apply theme class to <html>
   useEffect(() => {
-    const root = document.documentElement;
-    root.classList.remove('dark', 'light');
-    if (settings.theme === 'dark') root.classList.add('dark');
-    else if (settings.theme === 'light') root.classList.add('light');
+    applyTheme(settings.theme);
   }, [settings.theme]);
 
   // Sync overlay conversations into the main app

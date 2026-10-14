@@ -164,6 +164,77 @@
     }
   }
 
+  /*
+   * JARVIS theme: the HUD's palette and type for the classic UI (chat,
+   * sidebar, settings...). `:root.jarvis` (0,2,0) outranks both `.dark` and
+   * the `:root:not(.light)` system-dark rule above.
+   */
+  :root.jarvis {
+    --color-bg: #03070d;
+    --color-bg-secondary: #07101b;
+    --color-bg-tertiary: #0c1824;
+    --color-surface: rgba(6, 12, 22, 0.86);
+    --color-sidebar: rgba(4, 9, 17, 0.88);
+    --color-border: rgba(34, 211, 238, 0.14);
+    --color-border-subtle: rgba(34, 211, 238, 0.07);
+
+    --color-text: #e0f2f7;
+    --color-text-secondary: #8fa8b2;
+    --color-text-tertiary: #587480;
+    --color-text-inverse: #03070d;
+
+    --color-accent: #22d3ee;
+    --color-accent-hover: #67e8f9;
+    --color-accent-subtle: rgba(34, 211, 238, 0.1);
+    --color-accent-glow: rgba(34, 211, 238, 0.35);
+
+    --color-accent-amber: #fbbf24;
+    --color-accent-amber-hover: #fcd34d;
+    --color-accent-amber-subtle: rgba(251, 191, 36, 0.12);
+    --color-accent-purple: #a855f7;
+    --color-accent-purple-hover: #c084fc;
+    --color-accent-purple-subtle: rgba(168, 85, 247, 0.12);
+    --color-accent-blue-subtle: rgba(34, 211, 238, 0.1);
+
+    --color-success: #34d399;
+    --color-warning: #fbbf24;
+    --color-error: #fb7185;
+
+    --color-code-bg: #02060c;
+    --color-input-bg: rgba(5, 10, 20, 0.92);
+    --color-input-border: rgba(34, 211, 238, 0.28);
+
+    /* Same voices as the HUD log: the user in amber, JARVIS in cyan. */
+    --color-user-bubble: rgba(251, 191, 36, 0.1);
+    --color-user-bubble-text: #fde68a;
+    --color-on-accent: #03070d;
+    --color-disabled-bg: #0c1824;
+
+    --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.5);
+    --shadow-md: 0 4px 14px -2px rgb(0 0 0 / 0.6), 0 0 0 1px rgba(34, 211, 238, 0.06);
+    --shadow-lg: 0 18px 40px -12px rgb(0 0 0 / 0.8), 0 0 30px -12px rgba(34, 211, 238, 0.3);
+
+    color-scheme: dark;
+  }
+
+  :root.jarvis body {
+    font-family: var(--font-hud);
+    font-size: 13.5px;
+    letter-spacing: 0;
+  }
+
+  :root.jarvis h1,
+  :root.jarvis h2,
+  :root.jarvis h3 {
+    font-family: var(--font-display);
+    letter-spacing: 0.04em;
+  }
+
+  :root.jarvis ::selection {
+    background-color: rgba(34, 211, 238, 0.35);
+    color: #ecfeff;
+  }
+
   * {
     margin: 0;
     padding: 0;
@@ -1465,4 +1536,109 @@
   color: var(--color-on-accent, #ffffff);
   background: var(--color-accent);
   text-decoration: none;
+}
+
+/* ─── JARVIS theme: classic UI details (chat, sidebar) ───────────────────── */
+
+/* shadcn primitives follow the HUD palette instead of neutral dark grays */
+:root.jarvis {
+  --background: #03070d;
+  --foreground: #e0f2f7;
+  --card: #07101b;
+  --card-foreground: #e0f2f7;
+  --popover: #07101b;
+  --popover-foreground: #e0f2f7;
+  --primary: #22d3ee;
+  --primary-foreground: #03070d;
+  --secondary: #0c1824;
+  --secondary-foreground: #e0f2f7;
+  --muted: #0c1824;
+  --muted-foreground: #8fa8b2;
+  --accent: rgba(34, 211, 238, 0.1);
+  --accent-foreground: #a5f3fc;
+  --border: rgba(34, 211, 238, 0.14);
+  --input: rgba(34, 211, 238, 0.28);
+  --ring: #22d3ee;
+  --sidebar: #040911;
+  --sidebar-foreground: #e0f2f7;
+  --sidebar-primary: #22d3ee;
+  --sidebar-primary-foreground: #03070d;
+  --sidebar-accent: rgba(34, 211, 238, 0.08);
+  --sidebar-accent-foreground: #a5f3fc;
+  --sidebar-border: rgba(34, 211, 238, 0.14);
+  --sidebar-ring: #22d3ee;
+}
+
+/* Messages: the same voices as the HUD log (amber you, cyan JARVIS) */
+:root.jarvis .chat-bubble-user {
+  border: 1px solid rgba(251, 191, 36, 0.28);
+  border-radius: 12px 12px 3px 12px !important;
+  box-shadow: 0 0 24px -14px rgba(251, 191, 36, 0.6);
+}
+:root.jarvis .chat-bubble-assistant {
+  position: relative;
+  padding-left: 14px;
+  border-left: 2px solid rgba(34, 211, 238, 0.35);
+}
+:root.jarvis .chat-bubble-assistant::before {
+  content: 'JARVIS';
+  display: block;
+  margin-bottom: 4px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  color: rgba(34, 211, 238, 0.85);
+}
+:root.jarvis .prose {
+  font-size: 13.5px;
+  line-height: 1.65;
+}
+:root.jarvis .prose h1,
+:root.jarvis .prose h2,
+:root.jarvis .prose h3,
+:root.jarvis .prose h4 {
+  font-family: var(--font-display);
+  color: #a5f3fc;
+  letter-spacing: 0.06em;
+}
+:root.jarvis .prose strong { color: #ecfeff; }
+:root.jarvis .prose li::marker { color: rgba(34, 211, 238, 0.6); }
+
+/* Composer: HUD input glow */
+:root.jarvis .chat-composer {
+  border-radius: 9999px !important;
+  box-shadow: 0 0 30px -12px rgba(34, 211, 238, 0.35) !important;
+  transition: border-color 0.25s, box-shadow 0.25s;
+}
+:root.jarvis .chat-composer:focus-within {
+  border-color: rgba(34, 211, 238, 0.6) !important;
+  box-shadow: 0 0 36px -8px rgba(34, 211, 238, 0.5) !important;
+}
+:root.jarvis .chat-composer textarea { font-family: var(--font-hud); }
+:root.jarvis .chat-composer textarea::placeholder { color: #587480; }
+
+/* Empty state: reactor-like glow */
+:root.jarvis .chat-empty-icon {
+  border-radius: 9999px !important;
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  box-shadow: 0 0 28px -4px rgba(34, 211, 238, 0.55), inset 0 0 14px rgba(34, 211, 238, 0.25);
+  animation: jarvis-chat-pulse 3.2s ease-in-out infinite;
+}
+@keyframes jarvis-chat-pulse {
+  50% { box-shadow: 0 0 40px 0 rgba(34, 211, 238, 0.6), inset 0 0 18px rgba(34, 211, 238, 0.35); }
+}
+:root.jarvis .chat-greeting {
+  font-family: var(--font-display);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #a5f3fc !important;
+}
+
+/* Scrollbars in HUD cyan */
+:root.jarvis ::-webkit-scrollbar-thumb { background: rgba(34, 211, 238, 0.18); }
+:root.jarvis ::-webkit-scrollbar-thumb:hover { background: rgba(34, 211, 238, 0.32); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root.jarvis .chat-empty-icon { animation: none; }
 }

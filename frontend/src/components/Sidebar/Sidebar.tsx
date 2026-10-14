@@ -39,8 +39,13 @@ export function Sidebar() {
   const settings = useAppStore((s) => s.settings);
   const updateSettings = useAppStore((s) => s.updateSettings);
 
-  const ThemeIcon = settings.theme === 'light' ? Sun : settings.theme === 'dark' ? Moon : Monitor;
-  const nextTheme = settings.theme === 'light' ? 'dark' : settings.theme === 'dark' ? 'system' : 'light';
+  const THEME_CYCLE = { jarvis: 'light', light: 'dark', dark: 'system', system: 'jarvis' } as const;
+  const ThemeIcon =
+    settings.theme === 'light' ? Sun
+    : settings.theme === 'dark' ? Moon
+    : settings.theme === 'jarvis' ? Sparkles
+    : Monitor;
+  const nextTheme = THEME_CYCLE[settings.theme] ?? 'jarvis';
 
   const messages = useAppStore((s) => s.messages);
   const handleNewChat = () => {

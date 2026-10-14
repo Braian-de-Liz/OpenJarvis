@@ -183,12 +183,12 @@ export function ChatArea() {
         {isEmpty ? (
           <div className="flex flex-col items-center justify-center h-full px-4">
             <div
-              className="w-12 h-12 rounded-2xl flex items-center justify-center mb-4"
+              className="chat-empty-icon w-12 h-12 rounded-2xl flex items-center justify-center mb-4"
               style={{ background: 'var(--color-accent-subtle)', color: 'var(--color-accent)' }}
             >
               <Sparkles size={24} />
             </div>
-            <h2 className="text-xl font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
+            <h2 className="chat-greeting text-xl font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
               {getGreeting()}
             </h2>
             <p className="text-sm text-center max-w-sm mb-6" style={{ color: 'var(--color-text-secondary)' }}>

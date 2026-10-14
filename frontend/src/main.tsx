@@ -7,24 +7,15 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import App from './App';
 import { initApiBase } from './lib/api';
 import { initAnalytics } from './lib/analytics';
+import { useAppStore } from './lib/store';
+import { applyTheme } from './lib/theme';
 import './index.css';
 
-function applyTheme() {
-  try {
-    const raw = localStorage.getItem('openjarvis-settings');
-    const settings = raw ? JSON.parse(raw) : {};
-    const theme = settings.theme || 'system';
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-      document.documentElement.classList.remove('light');
-    } else if (theme === 'light') {
-      document.documentElement.classList.add('light');
-      document.documentElement.classList.remove('dark');
-    }
-  } catch { /* use system default */ }
-}
-
-applyTheme();
+// Before first paint, so there is no light/dark flash. The store has already
+// loaded (and migrated) the saved settings.
+try {
+  applyTheme(useAppStore.getState().settings.theme);
+} catch { /* use system default */ }
 
 // Fetch the API base URL from the Tauri backend before rendering.
 // This ensures JARVIS_PORT is defined in one place (the Rust backend).
