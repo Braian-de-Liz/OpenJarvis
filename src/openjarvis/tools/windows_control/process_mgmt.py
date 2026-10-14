@@ -61,17 +61,25 @@ class ProcessListTool(BaseTool):
 
         try:
             # Use PowerShell for rich process info
-            script = """
-            $procs = Get-Process
-            if ($args[0]) { $procs = $procs | Where-Object { $_.ProcessName -like "*$args[0]*" } }
-            if ($args[1]) { $procs = $procs | Where-Object { $_.Id -eq $args[1] } }
-            if (-not $args[2]) { $procs = $procs | Where-Object { $_.SessionId -ne 0 -or $_.ProcessName -in @('explorer', 'dwm', 'taskhostw') } }
-            $procs | Select-Object Id, ProcessName, CPU, WS, PM, NPM, Handles, Threads, StartTime, Path, SessionId | Sort-Object $args[3] -Descending | Select-Object -First $args[4] | ConvertTo-Json -Depth 2
-            """
+            filter_arg = filter_name if filter_name else ""
+            pid_arg = str(target_pid) if target_pid else ""
+            include_sys_arg = str(include_system).lower()
+            
+            script = (
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
+                "$procs = Get-Process\n"
+            )
+            if filter_arg:
+                script += f"if ('{filter_arg}') {{ $procs = $procs | Where-Object {{ $_.ProcessName -like \"*{filter_arg}*\" }} }}\n"
+            if pid_arg:
+                script += f"if ('{pid_arg}') {{ $procs = $procs | Where-Object {{ $_.Id -eq {pid_arg} }} }}\n"
+            if include_sys_arg == "false":
+                script += "if ('false' -eq 'false') { $procs = $procs | Where-Object { $_.SessionId -ne 0 -or $_.ProcessName -in @('explorer', 'dwm', 'taskhostw') } }\n"
+            script += f"$procs | Select-Object Id, ProcessName, CPU, WS, PM, NPM, Handles, Threads, StartTime, Path, SessionId | Sort-Object {sort_by} -Descending | Select-Object -First {limit} | ConvertTo-Json -Depth 2"
 
             result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", script, filter_name, str(target_pid) if target_pid else "", str(include_system).lower(), sort_by, str(limit)],
-                capture_output=True, text=True, timeout=15
+                ["powershell", "-NoProfile", "-Command", script],
+                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15
             )
 
             if result.returncode != 0:

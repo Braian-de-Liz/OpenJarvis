@@ -78,6 +78,37 @@ def _read_input(prompt: str = "You> ") -> Optional[str]:
     default=False,
     help="Enable voice I/O: mic input with silence detection + TTS response playback.",
 )
+@click.option(
+    "--hands-free",
+    "hands_free",
+    is_flag=True,
+    default=False,
+    help=(
+        "Continuous voice session (implies --voice): no Enter between turns; ends "
+        "after --idle-timeout seconds of silence or an exit phrase "
+        "('Jarvis, desligar'). Streams state to the /jarvis HUD."
+    ),
+)
+@click.option(
+    "--idle-timeout",
+    type=float,
+    default=30.0,
+    show_default=True,
+    help="Hands-free: seconds without speech before the session ends.",
+)
+@click.option(
+    "--silence-threshold",
+    type=float,
+    default=None,
+    envvar="JARVIS_SILENCE_THRESH",
+    help="Hands-free: mic RMS treated as speech (default: auto-calibrated).",
+)
+@click.option(
+    "--events-url",
+    default=None,
+    envvar="JARVIS_VOICE_EVENTS_URL",
+    help="Hands-free: jarvis serve base URL for HUD events (default: config server).",
+)
 @runtime_cli_options
 def chat(
     engine_key: str | None,
@@ -88,6 +119,10 @@ def chat(
     system_prompt: str | None,
     persona_name: str | None,
     voice_mode: bool,
+    hands_free: bool,
+    idle_timeout: float,
+    silence_threshold: float | None,
+    events_url: str | None,
     num_ctx: int | None,
     num_gpu: int | None,
     skip_runtime_panel: bool,
@@ -111,6 +146,13 @@ def chat(
     read back via text-to-speech (kokoro local or OpenAI TTS).
     """
     console = Console(stderr=True)
+
+    if hands_free:
+        # Hands-free must never block on a keyboard prompt.
+        voice_mode = True
+        pick_model = False
+        skip_runtime_panel = True
+    hands_free_ctl = None  # set after engine/agent setup; read by _confirm
 
     config = load_config()
     bus = EventBus(record_history=False)
@@ -232,6 +274,8 @@ def chat(
                     kwargs["max_turns"] = config.agent.max_turns
 
                     def _confirm(prompt: str) -> bool:
+                        if hands_free_ctl is not None:
+                            return hands_free_ctl.confirm(prompt)
                         console.print(
                             f"[yellow]Confirm:[/yellow] {prompt} [y/N] ",
                             end="",
@@ -290,6 +334,42 @@ def chat(
     # Keep voice state outside the core chat path so picker/runtime changes can
     # be layered independently. Loaded speech models live for this session.
     voice_session = VoiceSession(config) if voice_mode else None
+
+    events = None
+    if hands_free:
+        from openjarvis.cli._hands_free import HandsFreeSession, VoiceEventPublisher
+        from openjarvis.core.events import EventType
+
+        base_url = events_url
+        if base_url is None:
+            srv = getattr(config, "server", None)
+            host = getattr(srv, "host", "127.0.0.1") or "127.0.0.1"
+            if host in ("0.0.0.0", "::"):
+                host = "127.0.0.1"
+            base_url = f"http://{host}:{getattr(srv, 'port', 8000) or 8000}"
+        events = VoiceEventPublisher(base_url or None)
+        events.emit("session", engine=str(engine_name), model=str(model))
+        assert voice_session is not None
+        hands_free_ctl = HandsFreeSession(
+            console,
+            voice_session,
+            events=events,
+            idle_timeout=idle_timeout,
+            silence_threshold=silence_threshold,
+            language=voice_session.language(),
+        )
+
+        # Mirror tool calls onto the HUD (the agent publishes on this bus).
+        def _tool_event(phase: str):
+            def _handler(event: object) -> None:
+                data = getattr(event, "data", None) or {}
+                tool_name = str(data.get("tool") or data.get("name") or "")
+                events.emit("tool", name=tool_name, phase=phase)
+
+            return _handler
+
+        bus.subscribe(EventType.TOOL_CALL_START, _tool_event("start"))
+        bus.subscribe(EventType.TOOL_CALL_END, _tool_event("end"))
 
     # Print banner
     voice_hint = (
@@ -359,11 +439,30 @@ def chat(
         history.append(Message(role=Role.SYSTEM, content=system_prompt))
 
     # REPL loop
+    _hands_free_started = False
     while True:
         for note in _notifications.diff(get_status()):
             console.print(f"[dim cyan]{note}[/dim cyan]")
 
-        if voice_mode:
+        if hands_free:
+            assert hands_free_ctl is not None
+            if not _hands_free_started:
+                _hands_free_started = True
+                try:
+                    hands_free_ctl.start()
+                except Exception as exc:
+                    console.print(
+                        f"[red]Falha ao iniciar voz: {escape(str(exc))}[/red]"
+                    )
+                    hands_free_ctl.finish("start_failed")
+                    break
+                hands_free_ctl.say("Às suas ordens.")
+            heard = hands_free_ctl.listen()
+            if heard is None:
+                console.print("[dim]Sessão de voz encerrada.[/dim]")
+                break
+            user_input = heard
+        elif voice_mode:
             assert voice_session is not None
             result = read_voice_input(console, voice_session)
             if result is VOICE_EXIT:
@@ -464,6 +563,8 @@ def chat(
                 logger.debug("Failed to inject memory context", exc_info=True)
 
         # Generate response even when optional memory context is unavailable.
+        if hands_free_ctl is not None:
+            hands_free_ctl.thinking()
         try:
             if agent is not None:
                 from openjarvis.agents._stubs import AgentContext
@@ -494,7 +595,9 @@ def chat(
             console.print()
             console.print(Markdown(content))
             console.print()
-            if voice_mode:
+            if hands_free_ctl is not None:
+                hands_free_ctl.say(content)
+            elif voice_mode:
                 assert voice_session is not None
                 speak(content, console, voice_session)
 
@@ -506,9 +609,16 @@ def chat(
             )
         except KeyboardInterrupt:
             console.print("\n[dim]Generation interrupted.[/dim]")
+            if hands_free_ctl is not None:
+                hands_free_ctl.finish("interrupted")
+                break
         except Exception as exc:
             console.print(f"\n[red]Error: {exc}[/red]\n")
+            if hands_free_ctl is not None:
+                hands_free_ctl.say("Desculpe, ocorreu um erro ao processar o pedido.")
 
+    if events is not None:
+        events.close()
     if memory_service is not None:
         memory_service.stop()
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from rich.markup import escape
 
@@ -104,6 +104,14 @@ class VoiceSession:
             )
         return substitute, speed
 
+    def language(self) -> Optional[str]:
+        """Configured STT language (``speech.language``), or ``None`` = auto."""
+        from openjarvis.core.config import load_config
+
+        config = self._config if self._config is not None else load_config()
+        speech = getattr(config, "speech", None)
+        return (getattr(speech, "language", "") or "").strip() or None
+
     def discard_tts_backend(self) -> None:
         """Forget a backend that failed synthesis and allow the next fallback."""
         self._tts_backend = None
@@ -152,7 +160,9 @@ def record_voice(
 
     console.print("[dim]Transcribing…[/dim]")
     try:
-        result = backend.transcribe(audio_bytes, format="wav")
+        result = backend.transcribe(
+            audio_bytes, format="wav", language=active_session.language()
+        )
         text = result.text.strip()
         if text:
             console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")
@@ -164,8 +174,19 @@ def record_voice(
         return None
 
 
-def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
-    """Synthesize and play text, reusing a healthy backend for the session."""
+def speak(
+    text: str,
+    console: Any,
+    session: VoiceSession | None = None,
+    *,
+    on_audio: Callable[[bytes, int], None] | None = None,
+) -> None:
+    """Synthesize and play text, reusing a healthy backend for the session.
+
+    ``on_audio`` (if given) receives the synthesized WAV bytes and sample rate
+    just before playback starts -- the hands-free HUD uses it to animate the
+    waveform in sync with the voice.
+    """
     from openjarvis.speech.voice_io import play_wav
 
     active_session = session or VoiceSession()
@@ -186,6 +207,11 @@ def speak(text: str, console: Any, session: VoiceSession | None = None) -> None:
                 synth_kwargs["voice_id"] = voice_id
             result = backend.synthesize(text, **synth_kwargs)
             if result.audio:
+                if on_audio is not None:
+                    try:
+                        on_audio(result.audio, result.sample_rate)
+                    except Exception:
+                        pass  # visualization must never break playback
                 play_wav(result.audio, sample_rate=result.sample_rate)
             return
         except Exception as exc:

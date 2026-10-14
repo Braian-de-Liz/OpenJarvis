@@ -53,9 +53,10 @@ def _play_jingle(jingle_path: Path) -> bool:
         return False
 
 
-def _open_web_interface(port: int = 8000) -> None:
+def _open_web_interface(port: int = 8000, frontend_port: int = 5173, path: str = "/jarvis") -> None:
     """Abre a interface web no navegador padrão."""
-    url = f"http://localhost:{port}"
+    # Frontend (Vite dev server) roda na porta 5173 por padrão
+    url = f"http://localhost:{frontend_port}{path}"
     console.print(f"[cyan]Abrindo interface web: {url}[/cyan]")
     try:
         webbrowser.open(url)
@@ -80,20 +81,34 @@ def _get_uv_path() -> str:
     return "uv"  # fallback
 
 
-def _start_voice_chat() -> None:
-    """Inicia `uv run jarvis chat --voice` no diretório do projeto."""
+def _hud_events(port: int):
+    """Publisher for HUD state while waiting for claps (best-effort)."""
+    from openjarvis.cli._hands_free import VoiceEventPublisher
+
+    return VoiceEventPublisher(f"http://127.0.0.1:{port}")
+
+
+def _start_voice_chat(port: int = 8000, idle_timeout: float = 30.0) -> None:
+    """Run a hands-free voice session (``jarvis chat --hands-free``).
+
+    Returns when the session ends (idle timeout or exit phrase).
+    """
     # Detecta o diretório do projeto (onde está o pyproject.toml)
     project_dir = Path(__file__).resolve().parents[3]  # src/openjarvis/cli -> project root
-    console.print(f"[green]Iniciando chat por voz em {project_dir}[/green]")
+    console.print(f"[green]Iniciando sessão de voz em {project_dir}[/green]")
     try:
-        uv_path = _get_uv_path()
         subprocess.run(
-            [uv_path, "run", "jarvis", "chat", "--voice"],
+            _jarvis_cmd(
+                "chat",
+                "--hands-free",
+                "--idle-timeout", str(idle_timeout),
+                "--events-url", f"http://127.0.0.1:{port}",
+            ),
             cwd=project_dir,
             check=True,
         )
     except subprocess.CalledProcessError as exc:
-        console.print(f"[red]Erro ao iniciar chat: {exc}[/red]")
+        console.print(f"[red]Sessão de voz terminou com erro: {exc}[/red]")
     except FileNotFoundError:
         console.print("[red]Comando 'uv' não encontrado. Certifique-se de que uv está no PATH.[/red]")
 
@@ -107,51 +122,66 @@ def _check_server_running(port: int = 8000, host: str = "localhost") -> bool:
         return False
 
 
+def _jarvis_cmd(*args: str) -> list[str]:
+    """Run a jarvis subcommand with *this* interpreter (no `uv run` re-sync)."""
+    return [sys.executable, "-c", "from openjarvis.cli import main; main()", *args]
+
+
+def _server_log_path() -> Path:
+    log_dir = Path.home() / ".openjarvis"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / "show-server.log"
+
+
 def _start_web_server(port: int = 8000) -> bool:
-    """Inicia o servidor web `jarvis start` em background se não estiver rodando."""
+    """Start `jarvis serve` in background if nothing is listening on ``port``."""
     global _server_process
-    
-    if _check_server_running(port):
-        console.print(f"[dim]Servidor web já rodando na porta {port}[/dim]")
+
+    if _check_server_running(port, host="127.0.0.1"):
+        console.print(f"[dim]Servidor já rodando na porta {port}[/dim]")
         return True
-    
+
     project_dir = Path(__file__).resolve().parents[3]
-    console.print(f"[cyan]Iniciando servidor web na porta {port}...[/cyan]")
-    
+    log_path = _server_log_path()
+    console.print(f"[cyan]Iniciando jarvis serve na porta {port} (log: {log_path})...[/cyan]")
+
     try:
-        uv_path = _get_uv_path()
-        
-        # Inicia o servidor em background
+        log_file = open(log_path, "w", encoding="utf-8", errors="replace")
+        popen_kwargs: dict = {
+            "cwd": project_dir,
+            "stdout": log_file,
+            "stderr": subprocess.STDOUT,
+            "env": {**os.environ, "PYTHONIOENCODING": "utf-8"},
+        }
         if sys.platform == "win32":
-            _server_process = subprocess.Popen(
-                [uv_path, "run", "jarvis", "start", "--port", str(port)],
-                cwd=project_dir,
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
         else:
-            _server_process = subprocess.Popen(
-                [uv_path, "run", "jarvis", "start", "--port", str(port)],
-                cwd=project_dir,
-                start_new_session=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        
-        # Aguarda o servidor subir (polling)
-        for _ in range(30):  # até 30 segundos
+            popen_kwargs["start_new_session"] = True
+        _server_process = subprocess.Popen(
+            _jarvis_cmd("serve", "--host", "127.0.0.1", "--port", str(port)),
+            **popen_kwargs,
+        )
+
+        # Model/tool loading can take a while on first start.
+        for _ in range(90):
             time.sleep(1)
-            if _check_server_running(port):
-                console.print(f"[green]Servidor web iniciado em http://localhost:{port}[/green]")
+            if _server_process.poll() is not None:
+                break
+            if _check_server_running(port, host="127.0.0.1"):
+                console.print(f"[green]Servidor iniciado em http://127.0.0.1:{port}[/green]")
                 return True
-        
-        console.print(f"[yellow]Timeout aguardando servidor na porta {port}[/yellow]")
+
+        console.print(
+            f"[red]Servidor não subiu na porta {port}. Últimas linhas de {log_path}:[/red]"
+        )
+        try:
+            tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+            for line in tail:
+                console.print(f"[dim]  {line}[/dim]", markup=False)
+        except OSError:
+            pass
         return False
-        
-    except FileNotFoundError:
-        console.print("[red]Comando 'uv' não encontrado. Certifique-se de que uv está no PATH.[/red]")
-        return False
+
     except Exception as exc:
         console.print(f"[red]Erro ao iniciar servidor: {exc}[/red]")
         return False
@@ -284,6 +314,27 @@ def _listen_for_double_clap(
     show_default=True,
     help="Tempo máximo (segundos) entre duas palmas",
 )
+@click.option(
+    "--frontend-port",
+    type=int,
+    default=5173,
+    show_default=True,
+    help="Porta do frontend (Vite dev server)",
+)
+@click.option(
+    "--web-path",
+    type=str,
+    default="/jarvis",
+    show_default=True,
+    help="Caminho da página no frontend",
+)
+@click.option(
+    "--idle-timeout",
+    type=float,
+    default=30.0,
+    show_default=True,
+    help="Segundos de silêncio até a sessão de voz encerrar e voltar às palmas",
+)
 def show(
     threshold: int,
     mic: Optional[int],
@@ -291,6 +342,9 @@ def show(
     no_web: bool,
     no_jingle: bool,
     clap_window: float,
+    frontend_port: int,
+    web_path: str,
+    idle_timeout: float,
 ) -> None:
     """Ativação por duas palmas: ouve o microfone, detecta duas palmas seguidas,
     toca jingle (se existir), abre interface web e inicia chat por voz.
@@ -306,13 +360,17 @@ def show(
     project_dir = Path(__file__).resolve().parents[3]
     jingle_path = project_dir / "assets" / "jingle.mp3"
 
+    events = None
+    hud_opened = False
     try:
         # Inicia servidor web se necessário (antes do loop para estar pronto)
         if not no_web:
             _start_web_server(port)
-        
+        events = _hud_events(port)
+
         # Loop principal: espera duas palmas
         while True:
+            events.state("idle")
             detected = _listen_for_double_clap(
                 threshold=threshold,
                 mic_device=mic,
@@ -320,17 +378,21 @@ def show(
             )
             if detected:
                 console.print("[bold green]✨ Duas palmas detectadas! Ativando Jarvis...[/bold green]")
+                events.state("activated")
 
                 if not no_jingle:
                     _play_jingle(jingle_path)
 
-                if not no_web:
-                    _open_web_interface(port)
+                # Open the HUD once; later sessions reuse the same tab (it
+                # reconnects to the WebSocket on its own).
+                if not no_web and not hud_opened:
+                    _open_web_interface(port, frontend_port=frontend_port, path=web_path)
+                    hud_opened = True
 
-                _start_voice_chat()
+                _start_voice_chat(port=port, idle_timeout=idle_timeout)
 
                 # Após o chat terminar, volta a ouvir
-                console.print("\n[dim]Chat encerrado. Voltando a ouvir palmas...[/dim]\n")
+                console.print("\n[dim]Sessão encerrada. Voltando a ouvir palmas...[/dim]\n")
     except KeyboardInterrupt:
         console.print("\n[dim]Encerrado pelo usuário.[/dim]")
     except Exception as exc:
@@ -338,6 +400,9 @@ def show(
         import traceback
         traceback.print_exc()
     finally:
+        if events is not None:
+            events.state("idle")
+            events.close()
         _cleanup_server()
 
 

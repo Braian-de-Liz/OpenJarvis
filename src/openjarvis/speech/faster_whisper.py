@@ -77,6 +77,13 @@ class FasterWhisperBackend(SpeechBackend):
         )
         return fallback
 
+    def _should_fallback_to_cpu(self, exc: Exception) -> bool:
+        """True for missing-CUDA-runtime errors when the device was not forced."""
+        if self._device != "auto":
+            return False  # explicit cpu/cuda request: surface the error
+        msg = str(exc).lower()
+        return any(token in msg for token in ("cublas", "cudnn", "cuda", "libcudart"))
+
     def _ensure_model(self) -> WhisperModel:
         """Lazy-load the Whisper model on first use."""
         if self._model is None:
@@ -120,8 +127,24 @@ class FasterWhisperBackend(SpeechBackend):
                 if language:
                     kwargs["language"] = language
 
-                segments_iter, info = model.transcribe(tmp.name, **kwargs)
-                segments_list = list(segments_iter)
+                try:
+                    segments_iter, info = model.transcribe(tmp.name, **kwargs)
+                    segments_list = list(segments_iter)
+                except RuntimeError as exc:
+                    # device="auto" picks CUDA whenever a GPU is visible, but the
+                    # CUDA runtime DLLs (cuBLAS/cuDNN) are often missing on
+                    # Windows; the failure only surfaces at first inference.
+                    if not self._should_fallback_to_cpu(exc):
+                        raise
+                    logger.warning(
+                        "Faster-Whisper GPU inference failed (%s); using CPU", exc
+                    )
+                    self._device = "cpu"
+                    self._compute_type = "int8"
+                    self._model = None
+                    model = self._ensure_model()
+                    segments_iter, info = model.transcribe(tmp.name, **kwargs)
+                    segments_list = list(segments_iter)
             finally:
                 try:
                     os.unlink(tmp.name)

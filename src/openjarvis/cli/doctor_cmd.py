@@ -222,6 +222,58 @@ def _check_default_model(
     )
 
 
+def _check_local_llm(
+    probes: Optional[Dict[str, _EngineProbe]] = None,
+) -> CheckResult:
+    """Local-first LLM check: Ollama up with the model pulled, else cloud opt-in.
+
+    OpenJarvis defaults to local inference. Cloud (OpenRouter) is only a valid
+    substitute when the user explicitly provided ``OPENROUTER_API_KEY``.
+    """
+    import os
+
+    config = _get_config()
+    model = config.intelligence.default_model or ""
+    host = config.engine.ollama.host or "http://localhost:11434"
+    has_cloud_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+
+    resolved = probes if probes is not None else _probe_engines(config)
+    probe = resolved.get("ollama")
+    if probe is not None and probe.healthy and probe.engine is not None:
+        try:
+            models = probe.engine.list_models()
+        except Exception:
+            models = []
+        if not model or model in models or f"{model}:latest" in models:
+            return CheckResult(
+                "Local LLM (Ollama)", "ok", f"{model or 'auto'} ready at {host}"
+            )
+        return CheckResult(
+            "Local LLM (Ollama)",
+            "warn" if has_cloud_key else "fail",
+            f"Ollama running but {model!r} is not pulled",
+            details=f"Run `ollama pull {model}`.",
+        )
+
+    if has_cloud_key:
+        return CheckResult(
+            "Local LLM (Ollama)",
+            "warn",
+            f"Ollama unreachable at {host}; OPENROUTER_API_KEY set (cloud opt-in)",
+            details="Start Ollama for local-first inference: `ollama serve`.",
+        )
+    return CheckResult(
+        "Local LLM (Ollama)",
+        "fail",
+        f"Ollama unreachable at {host} and no cloud key configured",
+        details=(
+            "Start the local server with `ollama serve` (or open the Ollama app), "
+            f"then `ollama pull {model or 'qwen2.5:7b'}`. Cloud is opt-in via "
+            "OPENROUTER_API_KEY."
+        ),
+    )
+
+
 def _check_optional_deps() -> List[CheckResult]:
     """Check availability of optional dependency packages."""
     results: List[CheckResult] = []
@@ -377,6 +429,7 @@ def _run_all_checks() -> List[CheckResult]:
     checks.extend(_check_engines(engine_probes))
     checks.extend(_check_models(engine_probes))
     checks.append(_check_default_model(engine_probes))
+    checks.append(_check_local_llm(engine_probes))
     checks.extend(_check_optional_deps())
     checks.append(_check_speech_backend())
     checks.append(_check_nodejs())

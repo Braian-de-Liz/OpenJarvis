@@ -1345,6 +1345,15 @@ def include_all_routes(app) -> None:
     except Exception:
         logger.debug("WebSocket bridge not available", exc_info=True)
 
+    # Voice session relay: the hands-free CLI voice loop runs out of process
+    # and POSTs its state here; the /jarvis HUD subscribes over WebSocket.
+    try:
+        from openjarvis.server.voice_events import create_voice_events_router
+
+        app.include_router(create_voice_events_router())
+    except Exception:
+        logger.debug("Voice events relay not available", exc_info=True)
+
 
 __all__ = [
     "include_all_routes",

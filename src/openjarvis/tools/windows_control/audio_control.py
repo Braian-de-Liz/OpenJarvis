@@ -51,57 +51,32 @@ class AudioDeviceListTool(BaseTool):
         dev_type = params.get("type", "all")
 
         try:
-            script = """
-            Add-Type -AssemblyName System.Runtime.InteropServices
-            $code = @"
-            using System;
-            using System.Runtime.InteropServices;
-            public class AudioDevices {
-                [DllImport("winmm.dll")] public static extern int waveOutGetNumDevs();
-                [DllImport("winmm.dll")] public static extern int waveInGetNumDevs();
-                [DllImport("winmm.dll", CharSet=CharSet.Auto)] public static extern int waveOutGetDevCaps(int uDeviceID, ref WAVEOUTCAPS pwoc, int cbwoc);
-                [DllImport("winmm.dll", CharSet=CharSet.Auto)] public static extern int waveInGetDevCaps(int uDeviceID, ref WAVEINCAPS pwic, int cbwic);
-                [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Auto)]
-                public struct WAVEOUTCAPS {
-                    public ushort wMid; public ushort wPid; public uint vDriverVersion;
-                    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string szPname;
-                    public uint dwFormats; public ushort wChannels; public ushort wReserved1;
-                    public uint dwSupport;
-                }
-                [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Auto)]
-                public struct WAVEINCAPS {
-                    public ushort wMid; public ushort wPid; public uint vDriverVersion;
-                    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string szPname;
-                    public uint dwFormats; public ushort wChannels; public ushort wReserved1;
-                }
-            }
-"@
-            Add-Type -TypeDefinition $code -Language CSharp
-
+            # Simpler approach: use Get-AudioDevice from Windows or WMI
+            script = f"""
             $results = @()
-
-            # Playback devices
-            if ("{dev_type}" -in @("playback", "all")) {
-                $count = [AudioDevices]::waveOutGetNumDevs()
-                for ($i = 0; $i -lt $count; $i++) {
-                    $caps = New-Object AudioDevices+WAVEOUTCAPS
-                    [AudioDevices]::waveOutGetDevCaps($i, [ref]$caps, [System.Runtime.InteropServices.Marshal]::SizeOf($caps)) | Out-Null
-                    $results += @{ Type = "Playback"; Index = $i; Name = $caps.szPname.TrimEnd([char]0); Channels = $caps.wChannels }
-                }
-            }
-
-            # Recording devices
-            if ("{dev_type}" -in @("recording", "all")) {
-                $count = [AudioDevices]::waveInGetNumDevs()
-                for ($i = 0; $i -lt $count; $i++) {
-                    $caps = New-Object AudioDevices+WAVEINCAPS
-                    [AudioDevices]::waveInGetDevCaps($i, [ref]$caps, [System.Runtime.InteropServices.Marshal]::SizeOf($caps)) | Out-Null
-                    $results += @{ Type = "Recording"; Index = $i; Name = $caps.szPname.TrimEnd([char]0); Channels = $caps.wChannels }
-                }
-            }
-
+            
+            # Get playback devices via WMI
+            if ('{dev_type}' -in @('playback', 'all')) {{
+                $playback = Get-CimInstance -ClassName Win32_SoundDevice | Where-Object {{ $_.Availability -eq 3 -or $_.Availability -eq 8 }}
+                $i = 0
+                foreach ($p in $playback) {{
+                    $results += @{{ Type = "Playback"; Index = $i; Name = $p.Name; Status = $p.Status; Manufacturer = $p.Manufacturer }}
+                    $i++
+                }}
+            }}
+            
+            # Get recording devices
+            if ('{dev_type}' -in @('recording', 'all')) {{
+                $recording = Get-CimInstance -ClassName Win32_SoundDevice | Where-Object {{ $_.Availability -eq 3 -or $_.Availability -eq 8 }}
+                $i = 0
+                foreach ($r in $recording) {{
+                    $results += @{{ Type = "Recording"; Index = $i; Name = $r.Name; Status = $r.Status; Manufacturer = $r.Manufacturer }}
+                    $i++
+                }}
+            }}
+            
             $results | ConvertTo-Json -Depth 2
-            """.format(dev_type=dev_type)
+            """
 
             result = subprocess.run(
                 ["powershell", "-NoProfile", "-Command", script],
