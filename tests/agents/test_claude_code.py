@@ -843,3 +843,51 @@ class TestClaudeModelChoice:
         assert not is_cloud_model("claude-code:opus")
         assert not is_cloud_model("claude-code-agent:sonnet")
         assert is_cloud_model("claude-sonnet-4-5")  # the paid API model still is
+
+
+class TestRunnerSessionIsolation:
+    """The runner is its own session, not a child of the launching terminal's."""
+
+    def _scrub(self, env):
+        import shutil
+        import subprocess as sp
+
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node not available")
+        src = _RUNNER_SRC.joinpath("index.mjs").read_text(encoding="utf-8")
+        start = src.index("const BLOCKED_ENV")
+        end = src.index("// `apiKeySource`")
+        program = (
+            src[start:end]
+            + "console.log(JSON.stringify(scrubbedEnv("
+            + json.dumps(env)
+            + ")))"
+        )
+        out = sp.run([node, "-e", program], capture_output=True, text=True, check=True)
+        return json.loads(out.stdout)
+
+    def test_parent_session_variables_are_dropped(self):
+        env = self._scrub(
+            {
+                "ANTHROPIC_API_KEY": "x",
+                "CLAUDECODE": "1",
+                "AI_AGENT": "claude-code",
+                "CLAUDE_PID": "9",
+                "CLAUDE_CODE_SESSION_ID": "s",
+                "CLAUDE_CODE_CHILD_SESSION": "1",
+                "CLAUDE_CODE_MESSAGING_TOKEN": "t",
+                "CLAUDE_CODE_ENTRYPOINT": "cli",
+                "PATH": "/bin",
+            }
+        )
+        assert env == {"PATH": "/bin"}
+
+    def test_what_the_login_and_tools_need_is_kept(self):
+        keep = {
+            "CLAUDE_CODE_GIT_BASH_PATH": "C:/git/bash.exe",
+            "CLAUDE_CONFIG_DIR": "C:/cfg",
+            "HOME": "/h",
+            "USERPROFILE": "C:/u",
+        }
+        assert self._scrub(keep) == keep

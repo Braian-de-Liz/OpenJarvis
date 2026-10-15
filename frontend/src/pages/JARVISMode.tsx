@@ -6,7 +6,7 @@ import { useVoiceEvents } from '../lib/useVoiceEvents';
 import { apiFetch, checkHealth, fetchModels } from '../lib/api';
 import { sendChatTurn } from '../lib/chatTurn';
 import { useHudSettings } from '../lib/hudSettings';
-import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, CLAUDE_MODEL_OPTIONS, claudeModeOf, claudeModelFor, claudeModelLabel, isClaudeCode, localModels, pickLocalModel, rememberLocalModel, sourceOf } from '../lib/aiSource';
+import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, CLAUDE_MODEL_OPTIONS, claudeModeOf, claudeModelFor, claudeModelLabel, isClaudeCode, localModels, pickLocalModel, rememberLocalModel, sourceOf, unusualClaudeUsage } from '../lib/aiSource';
 import { useApprovalsStore } from '../lib/approvalsStore';
 import { toSpeakable } from '../lib/speakable';
 import { HudApprovals } from '../components/Jarvis/HudApprovals';
@@ -674,6 +674,14 @@ export function JARVISMode() {
     const result = await sendChatTurn(text, controller.signal);
     abortRef.current = null;
     if (!result || result.aborted || result.content.startsWith('Error:')) return;
+
+    // Claude "conversa" should cost ~400 tokens; flag a runaway reply at once.
+    const sentMsgs = useAppStore.getState().messages;
+    const warning = unusualClaudeUsage(
+      useAppStore.getState().selectedModel,
+      sentMsgs[sentMsgs.length - 1]?.usage,
+    );
+    if (warning) toast.warning(warning, { duration: 15000 });
 
     const { voiceOutputEnabled, voiceAutoplay } = useAppStore.getState().settings;
     if (voiceOutputEnabled && voiceAutoplay) {

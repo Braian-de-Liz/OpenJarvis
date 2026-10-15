@@ -295,6 +295,17 @@ class ClaudeCodeAgent(BaseAgent):
                 completion_tokens=completion,
                 total_tokens=prompt + completion,
             )
+            logger.info(
+                "claude_code usage (%s): input=%s cache_read=%s cache_create=%s "
+                "output=%s turns=%s model=%s",
+                self._mode,
+                usage.get("input_tokens", 0),
+                usage.get("cache_read_input_tokens", 0),
+                usage.get("cache_creation_input_tokens", 0),
+                completion,
+                metadata.get("num_turns"),
+                metadata.get("model"),
+            )
 
         self._emit_turn_end(turns=1)
         return AgentResult(

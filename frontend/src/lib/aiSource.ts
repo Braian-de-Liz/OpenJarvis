@@ -70,3 +70,20 @@ export function claudeModelLabel(inUse: string, chosen: string): string {
   if (inUse) return inUse;
   return CLAUDE_MODEL_OPTIONS.find((o) => o.value === chosen)?.label ?? chosen;
 }
+
+/** Claude Code "conversa" normally uses ~400 input tokens; far more is a red flag. */
+export const CLAUDE_CHAT_USAGE_WARN = 5000;
+
+/**
+ * Message to show when a Claude Code conversation-mode reply cost far more
+ * than that mode should (the plan limit is what pays for it), else null.
+ */
+export function unusualClaudeUsage(
+  model: string,
+  usage: { prompt_tokens: number } | undefined,
+): string | null {
+  if (!usage || !isClaudeCode(model) || claudeModeOf(model) !== 'chat') return null;
+  if (usage.prompt_tokens <= CLAUDE_CHAT_USAGE_WARN) return null;
+  const n = usage.prompt_tokens.toLocaleString('pt-BR');
+  return `Esta resposta do Claude (modo Conversa) gastou ${n} tokens de entrada — o normal é ~400. Confira o consumo do seu plano.`;
+}

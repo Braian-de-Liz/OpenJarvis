@@ -26,12 +26,26 @@ const BLOCKED_ENV = new Set([
   "AWS_BEARER_TOKEN_BEDROCK",
 ]);
 
+// Variables of the Claude Code session that happened to launch the server
+// (e.g. started from a terminal inside Claude Code). The runner is its own
+// independent session; inheriting these could tie it to that parent session.
+const PARENT_SESSION_ENV = new Set(["CLAUDECODE", "AI_AGENT", "CLAUDE_PID"]);
+const PARENT_SESSION_PREFIXES = [
+  "CLAUDE_CODE_SESSION_",
+  "CLAUDE_CODE_CHILD_SESSION",
+  "CLAUDE_CODE_MESSAGING_",
+  "CLAUDE_CODE_ENTRYPOINT",
+  "CLAUDE_CODE_SSE_PORT",
+];
+
 function scrubbedEnv(source) {
   const env = {};
   for (const [key, value] of Object.entries(source)) {
     if (key.startsWith("ANTHROPIC_")) continue;
     if (key.startsWith("CLAUDE_CODE_USE_")) continue;
     if (BLOCKED_ENV.has(key)) continue;
+    if (PARENT_SESSION_ENV.has(key)) continue;
+    if (PARENT_SESSION_PREFIXES.some((p) => key.startsWith(p))) continue;
     env[key] = value;
   }
   return env;
@@ -124,6 +138,7 @@ async function main() {
   let streamedText = false;
   let usage;
   let modelInUse;
+  let resultInfo;
   const toolResults = [];
   const toolUseIndexes = new Map();
 
@@ -210,6 +225,12 @@ async function main() {
         }
         content = message.result || content;
         usage = message.usage;
+        // Cost breakdown: lets the host see turns and per-model usage.
+        resultInfo = {
+          num_turns: message.num_turns,
+          total_cost_usd: message.total_cost_usd,
+          model_usage: message.modelUsage,
+        };
       }
     }
 
@@ -221,6 +242,7 @@ async function main() {
         session_id: request.session_id || undefined,
         usage,
         model: modelInUse,
+        ...(resultInfo || {}),
       },
     });
   } catch (error) {

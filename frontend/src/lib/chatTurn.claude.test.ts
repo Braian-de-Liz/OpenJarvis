@@ -98,3 +98,18 @@ describe('aiSource helpers', () => {
     expect(claudeModelLabel('', '')).toBe('Padrão do plano');
   });
 });
+
+describe('unusualClaudeUsage', () => {
+  it('flags a conversation-mode reply that costs far more than ~400 tokens', async () => {
+    const { unusualClaudeUsage } = await import('./aiSource');
+    expect(unusualClaudeUsage('claude-code', { prompt_tokens: 75626 })).toContain('75.626');
+    expect(unusualClaudeUsage('claude-code', { prompt_tokens: 520 })).toBeNull();
+  });
+
+  it('stays quiet for agent mode, local models and missing usage', async () => {
+    const { unusualClaudeUsage } = await import('./aiSource');
+    expect(unusualClaudeUsage('claude-code-agent', { prompt_tokens: 80000 })).toBeNull();
+    expect(unusualClaudeUsage('llama3.2:1b', { prompt_tokens: 80000 })).toBeNull();
+    expect(unusualClaudeUsage('claude-code', undefined)).toBeNull();
+  });
+});
