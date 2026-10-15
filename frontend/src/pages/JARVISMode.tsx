@@ -23,13 +23,18 @@ import {
   Mic, MicOff, Volume2, Headphones, Cpu, HardDrive, Wifi, Activity, Terminal, X,
   ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
   MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2, ShieldAlert,
-  Plus, Eraser, HelpCircle, LayoutGrid, Brain, AlarmClock, Sunrise,
+  Plus, Eraser, HelpCircle, LayoutGrid, Brain, AlarmClock, Sunrise, Bot,
 } from 'lucide-react';
 import { HudModules } from '../components/Jarvis/HudModules';
 import { HudMemory } from '../components/Jarvis/HudMemory';
 import { HudReminders } from '../components/Jarvis/HudReminders';
 import { HudBriefing } from '../components/Jarvis/HudBriefing';
 import { useRemindersStore } from '../lib/remindersStore';
+import { HudOperators } from '../components/Jarvis/HudOperators';
+import { HudChannels } from '../components/Jarvis/HudChannels';
+import { NOTIFY_AGENT_EVENTS, describeAgentEvent, useOperatorsStore } from '../lib/operatorsStore';
+import { ALL_AGENTS, useAgentEvents } from '../lib/useAgentEvents';
+import type { VoiceLogEntry } from '../lib/useVoiceEvents';
 
 /**
  * JARVIS Mode - Cinematic HUD Interface
@@ -593,6 +598,32 @@ export function JARVISMode() {
   useEffect(() => {
     void useRemindersStore.getState().load(); // tab badge even before the tab opens
   }, []);
+  // Continuous agents: badge + announce finished/failed runs (HUD-side log
+  // entries, merged with the voice transcript).
+  const runningAgents = useOperatorsStore((s) => s.agents.filter((a) => a.status === 'running').length);
+  const [hudEvents, setHudEvents] = useState<VoiceLogEntry[]>([]);
+  useEffect(() => {
+    void useOperatorsStore.getState().load();
+  }, []);
+  useAgentEvents(ALL_AGENTS, (ev) => {
+    const notice = describeAgentEvent(ev, useOperatorsStore.getState().agents);
+    void useOperatorsStore.getState().load();
+    if (!notice) return;
+    setHudEvents((prev) => [
+      ...prev.slice(-49),
+      { id: `agent-${Date.now()}-${prev.length}`, role: 'system', text: `◆ ${notice.text}`, timestamp: Date.now() },
+    ]);
+    if (notice.level === 'error') toast.error(notice.text);
+    else if (notice.level === 'warning') toast.warning(notice.text);
+    else toast.success(notice.text);
+    if (hud.speakNotifications) speakText(notice.text);
+  }, NOTIFY_AGENT_EVENTS);
+  const logEntries = hudEvents.length ? [...voice.log, ...hudEvents] : voice.log;
+  const clearHudLog = () => {
+    voice.clearLog();
+    setHudEvents([]);
+  };
+
   const lastNotification = useRef(0);
   useEffect(() => {
     const n = voice.notification;
@@ -868,8 +899,8 @@ export function JARVISMode() {
             className="h-80 lg:h-auto"
             actions={
               <>
-                {voice.log.length > 0 && (
-                  <button onClick={voice.clearLog} className="jarvis-icon-btn" title="Limpar transcrições de voz" aria-label="Limpar transcrições de voz">
+                {logEntries.length > 0 && (
+                  <button onClick={clearHudLog} className="jarvis-icon-btn" title="Limpar transcrições e avisos" aria-label="Limpar transcrições e avisos">
                     <Eraser size={13} />
                   </button>
                 )}
@@ -887,7 +918,7 @@ export function JARVISMode() {
           >
             <HudLog
               messages={messages}
-              voiceLog={voice.log}
+              voiceLog={logEntries}
               stream={streamState}
               activeId={activeId}
               userName={hud.userName}
@@ -1007,6 +1038,13 @@ export function JARVISMode() {
                 },
                 { id: 'briefing', label: 'Briefing', icon: <Sunrise size={12} />, render: () => <HudBriefing onSpeak={speakText} /> },
                 { id: 'memory', label: 'Memória', icon: <Brain size={12} />, render: () => <HudMemory /> },
+                {
+                  id: 'operators',
+                  label: 'Agentes',
+                  icon: <Bot size={12} />,
+                  badge: runningAgents,
+                  render: () => <HudOperators />,
+                },
               ]}
             />
           </HUDPanel>
@@ -1214,6 +1252,11 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
               checked={hud.reducedMotion}
               onChange={(v) => updateHud({ reducedMotion: v })}
             />
+          </section>
+
+          <section className="jarvis-drawer-section">
+            <h4>Celular & canais</h4>
+            <HudChannels />
           </section>
 
           <section className="jarvis-drawer-section">

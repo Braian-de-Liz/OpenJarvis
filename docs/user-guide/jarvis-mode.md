@@ -118,26 +118,47 @@ Example: "Jarvis, desligar."
 
 ---
 
-## The HUD (`/jarvis`)
+## The HUD (`/` and `/jarvis`)
 
-The HUD is a full-screen page outside the normal app layout. Press **Esc** or the ⏻ button to leave it.
+The HUD is the home screen. The 💬 button opens the classic UI (chat at `/chat`, agents, dashboard, settings); ⚙ opens the HUD settings; **?** lists keyboard shortcuts.
 
 | Area | Content |
 |------|---------|
-| Top bar | Voice state, relay link (`VOZ LINK` / `VOZ OFFLINE`), STT engine/model, clock, audio level |
-| Center | Arc reactor and waveform: cyan when idle or listening, purple when speaking or processing; status line and hint |
-| Telemetria (SYS·01) | CPU, GPU, RAM, GPU temperature, network up/down |
-| Log de Comunicação (COM·02) | Typed chat and voice turns, in time order |
-| Controles (CTL·03) | System controls (static placeholders, marked **DEMO**) |
+| Top bar | Status, model (click to change), voice relay link, pending approvals, clock, user name, audio level |
+| Center | Arc reactor and waveform (cyan listening, purple speaking/processing); **Falar** records from the browser mic, **Testar voz** uses TTS |
+| Telemetria (SYS·01) | CPU, GPU, RAM, GPU temperature, network. Shows **OFFLINE** when `/api/system/metrics` can't answer |
+| Log de Comunicação (COM·02) | Typed and voice turns with Markdown, tool calls, timing and notices; new conversation / clear |
+| Aprovações (SEC·05) | Agent actions waiting for approval (only shown when there are some) |
+| Status (CTL·03) | Server, engine, transcription, TTS and voice relay health |
+| Módulos (MOD·06) | Tabs: **Lembretes**, **Briefing**, **Memória**, **Agentes** |
 | Ações Rápidas (ACT·04) | One-click commands such as volume, close Chrome or screenshot |
 
-Below 1024 px wide, the panels stack in a single scrolling column. Animations respect `prefers-reduced-motion`.
+Typed commands and quick actions are sent to the selected model through `/v1/chat/completions`. Hold **Ctrl+Space** to talk (push-to-talk); release to send. The classic UI uses the matching **JARVIS** theme by default (Settings → Appearance).
 
-!!! note "DEMO badge"
-    The telemetry panel shows **DEMO** with simulated values whenever `/api/system/metrics` is unreachable or doesn't return JSON. Usually this means `jarvis serve` isn't running or is an old build.
+### Modules
 
-!!! note "Typed commands"
-    The HUD input and the quick actions currently add the message to the conversation log only. They are not sent to the agent yet. Voice is the working path.
+- **Lembretes** — "me lembre de…" in 5/15/60 minutes, at a date/time, optionally every hour. `jarvis serve` runs its own reminder scheduler (`~/.openjarvis/reminders.db`, separate from `jarvis scheduler`), so reminders fire while the server is up: a toast, a log line and, with *Ler lembretes e avisos em voz alta*, speech. API: `GET/POST /v1/reminders`, `POST /v1/reminders/{id}/pause|resume`, `DELETE /v1/reminders/{id}`.
+- **Briefing** — today's morning digest from `/api/digest`: generate, read and play its audio (or read it with TTS).
+- **Memória** — store and search facts in the memory backend (`/v1/memory`). Needs the native `openjarvis_rust` extension; when it's missing the tab shows the server's fix instructions.
+- **Agentes** — continuous agents with run / pause / resume. Finished, failed, stalled or over-budget runs are announced in the log, as a toast and optionally by voice.
+
+### Talking to Jarvis from your phone (Telegram)
+
+1. In Telegram, message **@BotFather** → `/newbot` and copy the token.
+2. Find your chat id (for example with **@userinfobot**).
+3. Add to `~/.openjarvis/config.toml`:
+
+    ```toml
+    [channel]
+    enabled = true
+    default_channel = "telegram"
+
+    [channel.telegram]
+    bot_token = "123456:ABC…"      # or TELEGRAM_BOT_TOKEN
+    allowed_chat_ids = "123456789" # comma-separated; restrict it to yourself
+    ```
+
+4. Restart `jarvis serve`. HUD settings → *Celular & canais* shows the connected channel.
 
 ---
 

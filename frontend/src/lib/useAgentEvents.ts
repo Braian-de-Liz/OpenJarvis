@@ -46,9 +46,13 @@ export function buildWsProtocols(): string[] | undefined {
     : undefined;
 }
 
+/** Pass as `agentId` to receive events from every agent. */
+export const ALL_AGENTS = '*';
+
 /**
  * Subscribe to agent events over WebSocket.
  * Auto-reconnects with backoff when the socket drops.
+ * `agentId` undefined disables the subscription; `ALL_AGENTS` listens to all.
  */
 export function useAgentEvents(
   agentId: string | undefined,
@@ -70,7 +74,7 @@ export function useAgentEvents(
     const connect = () => {
       if (closed) return;
       try {
-        ws = new WebSocket(buildWsUrl(agentId), buildWsProtocols());
+        ws = new WebSocket(buildWsUrl(agentId === ALL_AGENTS ? undefined : agentId), buildWsProtocols());
       } catch {
         schedule();
         return;
