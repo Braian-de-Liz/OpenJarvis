@@ -25,10 +25,13 @@ import {
   ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
   MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2, ShieldAlert,
   Plus, Eraser, HelpCircle, LayoutGrid, Brain, AlarmClock, Sunrise, Bot,
-  ScanText,
+  ScanText, Gauge,
 } from 'lucide-react';
 import { buildScreenPrompt, readScreen } from '../lib/screenRead';
-import { HudModules } from '../components/Jarvis/HudModules';
+import { HudModules, OPEN_MODULE_EVENT } from '../components/Jarvis/HudModules';
+import { HudContext } from '../components/Jarvis/HudContext';
+import { useContextStore } from '../lib/contextStore';
+import { contextLevel, formatTokens } from '../lib/contextWindow';
 import { HudMemory } from '../components/Jarvis/HudMemory';
 import { HudReminders } from '../components/Jarvis/HudReminders';
 import { HudBriefing } from '../components/Jarvis/HudBriefing';
@@ -629,6 +632,21 @@ export function JARVISMode() {
     setHudEvents([]);
   };
 
+  // Context window: keep the shared store in sync with the chat and model.
+  const ctxSnapshot = useContextStore((s) => s.snapshot);
+  const ctxInfo = useContextStore((s) => s.info);
+  useEffect(() => {
+    void useContextStore.getState().loadWindow(selectedModel);
+  }, [selectedModel]);
+  useEffect(() => {
+    useContextStore.getState().setMessages(messages);
+  }, [messages]);
+  const ctxLevel = contextLevel(ctxSnapshot.fraction);
+  const openContextTab = () => {
+    window.dispatchEvent(new CustomEvent(OPEN_MODULE_EVENT, { detail: 'context' }));
+    document.getElementById('jarvis-modules')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  };
+
   const lastNotification = useRef(0);
   useEffect(() => {
     const n = voice.notification;
@@ -861,6 +879,22 @@ export function JARVISMode() {
                   : selectedModel}
             </span>
           </button>
+          {ctxSnapshot.used > 0 && (
+            <button
+              type="button"
+              onClick={openContextTab}
+              className={`jarvis-pill hidden md:flex hover:border-cyan-400/40 ${ctxLevel === 'high' ? 'text-rose-300 border-rose-400/50' : ctxLevel === 'warn' ? 'text-amber-300 border-amber-400/40' : ''}`}
+              title="Janela de contexto: quanto da memória de trabalho do modelo esta conversa ocupa"
+            >
+              <Gauge size={12} />
+              <span className="text-zinc-500">CTX</span>
+              <span className={ctxLevel === 'ok' ? 'text-cyan-200' : ''}>
+                {formatTokens(ctxSnapshot.used)}
+                {ctxSnapshot.window ? ` / ${formatTokens(ctxSnapshot.window)}` : ''}
+                {ctxSnapshot.fraction !== null && ` · ${Math.round(ctxSnapshot.fraction * 100)}%`}
+              </span>
+            </button>
+          )}
           <div
             className="jarvis-pill hidden lg:flex"
             title={voice.connected ? 'Conectado ao relay de voz (/v1/voice/ws)' : 'Sem conexão com jarvis serve'}
@@ -1071,7 +1105,7 @@ export function JARVISMode() {
               />
             </div>
           </HUDPanel>
-          <HUDPanel title="Módulos" icon={<LayoutGrid size={14} />} code="MOD·06" collapsible>
+          <HUDPanel id="jarvis-modules" title="Módulos" icon={<LayoutGrid size={14} />} code="MOD·06" collapsible>
             <HudModules
               modules={[
                 {
@@ -1082,6 +1116,13 @@ export function JARVISMode() {
                   render: () => <HudReminders />,
                 },
                 { id: 'briefing', label: 'Briefing', icon: <Sunrise size={12} />, render: () => <HudBriefing onSpeak={speakText} /> },
+                {
+                  id: 'context',
+                  label: 'Contexto',
+                  icon: <Gauge size={12} />,
+                  badge: ctxSnapshot.outsideCount || undefined,
+                  render: () => <HudContext onNewConversation={handleNewConversation} />,
+                },
                 { id: 'memory', label: 'Memória', icon: <Brain size={12} />, render: () => <HudMemory /> },
                 {
                   id: 'operators',

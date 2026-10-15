@@ -77,11 +77,15 @@ export function ToolChip({ call }: { call: ToolCallInfo }) {
 
 export function TelemetryLine({ message }: { message: ChatMessage }) {
   const t = message.telemetry;
-  if (!t) return null;
+  if (!t && !message.usage) return null;
   const parts: string[] = [];
-  if (typeof t.total_ms === 'number') parts.push(t.total_ms >= 1000 ? `${(t.total_ms / 1000).toFixed(1)}s` : `${Math.round(t.total_ms)}ms`);
-  if (typeof t.tokens_per_sec === 'number' && t.tokens_per_sec > 0) parts.push(`${t.tokens_per_sec.toFixed(1)} tok/s`);
-  if (t.model_id) parts.push(t.model_id);
+  if (typeof t?.total_ms === 'number') parts.push(t.total_ms >= 1000 ? `${(t.total_ms / 1000).toFixed(1)}s` : `${Math.round(t.total_ms)}ms`);
+  if (typeof t?.tokens_per_sec === 'number' && t.tokens_per_sec > 0) parts.push(`${t.tokens_per_sec.toFixed(1)} tok/s`);
+  const u = message.usage;
+  if (u && (u.prompt_tokens || u.completion_tokens)) {
+    parts.push(`↑${u.prompt_tokens.toLocaleString('pt-BR')} ↓${u.completion_tokens.toLocaleString('pt-BR')} tokens`);
+  }
+  if (t?.model_id) parts.push(t.model_id);
   if (parts.length === 0) return null;
   return <div className="text-[9px] tracking-wider text-zinc-600 mt-1">{parts.join(' · ')}</div>;
 }

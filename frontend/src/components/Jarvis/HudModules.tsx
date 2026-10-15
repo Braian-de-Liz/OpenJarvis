@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 export interface HudModule {
   id: string;
@@ -10,6 +10,7 @@ export interface HudModule {
 }
 
 const TAB_KEY = 'openjarvis-hud-module-tab';
+export const OPEN_MODULE_EVENT = 'hud:open-module';
 
 function loadTab(fallback: string): string {
   try {
@@ -31,6 +32,16 @@ export function HudModules({ modules }: { modules: HudModule[] }) {
       localStorage.setItem(TAB_KEY, id);
     } catch {}
   };
+
+  // Lets other HUD parts (e.g. the CTX pill) jump to a tab.
+  useEffect(() => {
+    const open = (e: Event) => {
+      const id = (e as CustomEvent<string>).detail;
+      if (modules.some((m) => m.id === id)) select(id);
+    };
+    window.addEventListener(OPEN_MODULE_EVENT, open);
+    return () => window.removeEventListener(OPEN_MODULE_EVENT, open);
+  });
 
   return (
     <div className="jarvis-font-hud text-[11px]">

@@ -33,6 +33,8 @@ from openjarvis.server.models import (
     StreamChoice,
     UsageInfo,
 )
+from openjarvis.server.token_usage import snapshot as usage_snapshot
+from openjarvis.server.token_usage import stream_usage, stream_usage_owner
 
 router = APIRouter()
 
@@ -1072,6 +1074,8 @@ async def _handle_stream(
     async def generate():
         started_at = time.time()
         full_content = ""
+        usage_owner = None  # engine whose own token count we report
+        usage_before = None
         # Start with the configured route, then correct it below if the
         # MultiEngine safety path deliberately bypasses that route.
         actual_telemetry_engine = telemetry_engine
@@ -1121,6 +1125,8 @@ async def _handle_stream(
                         model, messages, req.temperature, req.max_tokens
                     )
                 else:
+                    usage_owner = stream_usage_owner(engine, model)
+                    usage_before = usage_snapshot(usage_owner)
                     token_iter = engine.stream(
                         messages,
                         model=model,
@@ -1204,6 +1210,11 @@ async def _handle_stream(
             ],
         )
         finish_dict = _json.loads(finish_data.model_dump_json())
+        # Token usage: the engine's own count when it recorded one for this
+        # stream, otherwise an estimate (flagged "estimated").
+        finish_dict["usage"] = stream_usage(
+            usage_owner, usage_before, messages, full_content
+        )
 
         # Tag the finish chunk with the backend that actually yielded tokens,
         # including the explicit local fallback around a stale MultiEngine map.

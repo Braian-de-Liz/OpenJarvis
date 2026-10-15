@@ -1357,6 +1357,14 @@ def include_all_routes(app) -> None:
     except Exception:
         logger.debug("Voice events relay not available", exc_info=True)
 
+    # HUD context window meter.
+    try:
+        from openjarvis.server.context_window import create_context_window_router
+
+        app.include_router(create_context_window_router())
+    except Exception:
+        logger.debug("Context window route not available", exc_info=True)
+
     # HUD "o que tem na minha tela?": capture + Windows OCR.
     try:
         from openjarvis.server.vision import create_vision_router
