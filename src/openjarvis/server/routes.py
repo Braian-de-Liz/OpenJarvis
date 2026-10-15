@@ -161,6 +161,17 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
     return [combined_system, *non_system_messages]
 
 
+# Security gates for direct agent operations (``authorize_secured_operation``)
+# publish TOOL_CALL events named after the operation. They are bookkeeping, not
+# tools: showing them made every reply look like it had run a "tool".
+_INTERNAL_OPERATIONS = frozenset({"agent_run", "hybrid_agent_run"})
+
+
+def is_internal_operation(tool: Any) -> bool:
+    """True for the permission-gate pseudo tools that should stay hidden."""
+    return isinstance(tool, str) and tool in _INTERNAL_OPERATIONS
+
+
 CLAUDE_CODE_MODEL = "claude-code"  # conversation mode (light, no tools)
 CLAUDE_CODE_AGENT_MODEL = "claude-code-agent"  # agent mode (Claude Code tools)
 _CLAUDE_CODE_MODES = {CLAUDE_CODE_MODEL: "chat", CLAUDE_CODE_AGENT_MODEL: "agent"}
@@ -782,6 +793,8 @@ async def _handle_agent_stream(
         )
 
         def _on_live(event) -> None:
+            if is_internal_operation(event.data.get("tool")):
+                return  # permission gate, not something the agent "did"
             if event.data.get("agent") == agent_name:
                 loop.call_soon_threadsafe(live.put_nowait, event)
 

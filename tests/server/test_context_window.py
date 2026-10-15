@@ -115,3 +115,16 @@ def test_estimates_when_the_engine_recorded_nothing_new():
     assert usage["completion_tokens"] == 20
     assert usage["prompt_tokens"] >= 100
     assert usage["total_tokens"] == usage["prompt_tokens"] + 20
+
+
+# --- internal operations hidden from the tool stream -------------------------
+
+
+def test_permission_gates_are_not_reported_as_tools():
+    from openjarvis.server.routes import is_internal_operation
+
+    assert is_internal_operation("agent_run")
+    assert is_internal_operation("hybrid_agent_run")
+    assert not is_internal_operation("Read")
+    assert not is_internal_operation("shell_exec")
+    assert not is_internal_operation(None)
