@@ -46,7 +46,8 @@ export function HudModules({ modules }: { modules: HudModule[] }) {
             title={m.label}
           >
             {m.icon}
-            <span className="hidden xl:inline">{m.label}</span>
+            {/* Only the active tab spells its name, so several tabs fit the column. */}
+            {m.id === current.id && <span className="truncate">{m.label}</span>}
             {!!m.badge && <span className="jarvis-tab-badge">{m.badge}</span>}
           </button>
         ))}

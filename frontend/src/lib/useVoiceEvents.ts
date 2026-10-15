@@ -19,8 +19,16 @@ export interface VoiceLogEntry {
   timestamp: number; // ms
 }
 
+/** Something the server wants announced (reminder fired, agent finished...). */
+export interface VoiceNotification {
+  id: number;
+  kind: 'reminder' | 'agent' | 'info';
+  title: string;
+  text: string;
+}
+
 interface VoiceEventPayload {
-  type: 'state' | 'transcript' | 'response' | 'level' | 'tool' | 'session';
+  type: 'state' | 'transcript' | 'response' | 'level' | 'tool' | 'session' | 'notify';
   timestamp: number; // seconds (server clock)
   data: Record<string, unknown>;
 }
@@ -37,6 +45,8 @@ export interface VoiceEventsSnapshot {
   model: string;
   /** Forget the voice transcript shown in the HUD (live state is untouched). */
   clearLog: () => void;
+  /** Latest server notification; `id` changes on every new one. */
+  notification: VoiceNotification | null;
 }
 
 const MAX_LOG = 100;
@@ -69,6 +79,7 @@ export function useVoiceEvents(): VoiceEventsSnapshot {
   const [log, setLog] = useState<VoiceLogEntry[]>([]);
   const [activeTool, setActiveTool] = useState<string | null>(null);
   const [session, setSession] = useState({ engine: '', model: '' });
+  const [notification, setNotification] = useState<VoiceNotification | null>(null);
   const decayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seq = useRef(0);
 
@@ -120,6 +131,16 @@ export function useVoiceEvents(): VoiceEventsSnapshot {
         case 'session':
           setSession({ engine: String(d.engine || ''), model: String(d.model || '') });
           break;
+        case 'notify': {
+          const text = String(d.text || '');
+          if (!text) break;
+          const kind = d.kind === 'reminder' || d.kind === 'agent' ? d.kind : 'info';
+          const title = String(d.title || (kind === 'reminder' ? 'Lembrete' : 'Aviso'));
+          append('system', `${kind === 'reminder' ? '⏰' : '◆'} ${title}: ${text}`);
+          seq.current += 1;
+          setNotification({ id: seq.current, kind, title, text });
+          break;
+        }
       }
     };
 
@@ -167,5 +188,5 @@ export function useVoiceEvents(): VoiceEventsSnapshot {
 
   const clearLog = useCallback(() => setLog([]), []);
 
-  return { connected, state, level, levelSource, log, activeTool, ...session, clearLog };
+  return { connected, state, level, levelSource, log, activeTool, ...session, clearLog, notification };
 }

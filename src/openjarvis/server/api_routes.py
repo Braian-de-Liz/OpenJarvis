@@ -1347,12 +1347,23 @@ def include_all_routes(app) -> None:
 
     # Voice session relay: the hands-free CLI voice loop runs out of process
     # and POSTs its state here; the /jarvis HUD subscribes over WebSocket.
+    voice_hub = None
     try:
         from openjarvis.server.voice_events import create_voice_events_router
 
-        app.include_router(create_voice_events_router())
+        voice_router = create_voice_events_router()
+        voice_hub = getattr(voice_router, "voice_hub", None)
+        app.include_router(voice_router)
     except Exception:
         logger.debug("Voice events relay not available", exc_info=True)
+
+    # HUD reminders: own scheduler + store, announced through the voice relay.
+    try:
+        from openjarvis.server.reminders import create_reminders_router
+
+        app.include_router(create_reminders_router(voice_hub))
+    except Exception:
+        logger.debug("Reminders not available", exc_info=True)
 
     # Host telemetry for the /jarvis HUD (CPU/RAM/net via psutil, GPU via NVML).
     try:

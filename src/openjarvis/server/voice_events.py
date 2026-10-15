@@ -21,7 +21,13 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-VoiceEventType = Literal["state", "transcript", "response", "level", "tool", "session"]
+VoiceEventType = Literal[
+    "state", "transcript", "response", "level", "tool", "session", "notify"
+]
+
+# "notify": something the HUD should announce (a reminder firing, an agent
+# finishing). Published by in-process producers as well as the voice loop.
+NOTIFY_KINDS = frozenset({"reminder", "agent", "info"})
 
 VOICE_STATES = frozenset(
     {
@@ -72,6 +78,16 @@ def _sanitize(event_type: str, data: Dict[str, Any]) -> Dict[str, Any] | None:
         }
     if event_type == "session":
         return {k: str(v)[:200] for k, v in data.items() if k in ("engine", "model")}
+    if event_type == "notify":
+        text = str(data.get("text", "")).strip()
+        if not text:
+            return None
+        kind = str(data.get("kind", "info"))
+        return {
+            "kind": kind if kind in NOTIFY_KINDS else "info",
+            "title": str(data.get("title", ""))[:80],
+            "text": text[:500],
+        }
     return None
 
 
@@ -179,4 +195,9 @@ def create_voice_events_router(hub: Optional[VoiceEventHub] = None) -> APIRouter
     return router
 
 
-__all__ = ["VOICE_STATES", "VoiceEventHub", "create_voice_events_router"]
+__all__ = [
+    "NOTIFY_KINDS",
+    "VOICE_STATES",
+    "VoiceEventHub",
+    "create_voice_events_router",
+]

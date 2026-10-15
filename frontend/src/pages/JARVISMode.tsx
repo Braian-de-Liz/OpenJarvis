@@ -23,10 +23,13 @@ import {
   Mic, MicOff, Volume2, Headphones, Cpu, HardDrive, Wifi, Activity, Terminal, X,
   ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
   MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2, ShieldAlert,
-  Plus, Eraser, HelpCircle, LayoutGrid, Brain,
+  Plus, Eraser, HelpCircle, LayoutGrid, Brain, AlarmClock, Sunrise,
 } from 'lucide-react';
 import { HudModules } from '../components/Jarvis/HudModules';
 import { HudMemory } from '../components/Jarvis/HudMemory';
+import { HudReminders } from '../components/Jarvis/HudReminders';
+import { HudBriefing } from '../components/Jarvis/HudBriefing';
+import { useRemindersStore } from '../lib/remindersStore';
 
 /**
  * JARVIS Mode - Cinematic HUD Interface
@@ -578,6 +581,28 @@ export function JARVISMode() {
     return () => clearInterval(id);
   }, [loadApprovals]);
 
+  // Speak arbitrary text when voice output is on (briefing, notifications).
+  const speakText = useCallback((text: string) => {
+    const { voiceOutputEnabled } = useAppStore.getState().settings;
+    const spoken = toSpeakable(text);
+    if (voiceOutputEnabled && spoken) void tts.speak(`hud-say-${Date.now()}`, spoken);
+  }, [tts]);
+
+  // Server notifications (a reminder firing...): toast, refresh, read aloud.
+  const activeReminders = useRemindersStore((s) => s.items.filter((r) => r.status === 'active').length);
+  useEffect(() => {
+    void useRemindersStore.getState().load(); // tab badge even before the tab opens
+  }, []);
+  const lastNotification = useRef(0);
+  useEffect(() => {
+    const n = voice.notification;
+    if (!n || n.id === lastNotification.current) return;
+    lastNotification.current = n.id;
+    toast(n.title, { description: n.text, duration: 15000 });
+    if (n.kind === 'reminder') void useRemindersStore.getState().load();
+    if (hud.speakNotifications) speakText(`${n.title}: ${n.text}`);
+  }, [voice.notification, hud.speakNotifications, speakText]);
+
   const handleDecide = async (id: string, approve: boolean) => {
     const ok = await approvals.decide(id, approve);
     if (!ok) toast.error('Não foi possível registrar a decisão. Tente de novo.');
@@ -973,6 +998,14 @@ export function JARVISMode() {
           <HUDPanel title="Módulos" icon={<LayoutGrid size={14} />} code="MOD·06" collapsible>
             <HudModules
               modules={[
+                {
+                  id: 'reminders',
+                  label: 'Lembretes',
+                  icon: <AlarmClock size={12} />,
+                  badge: activeReminders,
+                  render: () => <HudReminders />,
+                },
+                { id: 'briefing', label: 'Briefing', icon: <Sunrise size={12} />, render: () => <HudBriefing onSpeak={speakText} /> },
                 { id: 'memory', label: 'Memória', icon: <Brain size={12} />, render: () => <HudMemory /> },
               ]}
             />
@@ -1158,6 +1191,12 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
               checked={hud.pushToTalk}
               disabled={!settings.speechEnabled}
               onChange={(v) => updateHud({ pushToTalk: v })}
+            />
+            <Toggle
+              label="Ler lembretes e avisos em voz alta"
+              checked={hud.speakNotifications}
+              disabled={!settings.voiceOutputEnabled}
+              onChange={(v) => updateHud({ speakNotifications: v })}
             />
             <p className="jarvis-field-hint mt-2">
               Ativação por palmas e sessão mãos-livres: rode <code className="text-cyan-300">jarvis show</code> no terminal.

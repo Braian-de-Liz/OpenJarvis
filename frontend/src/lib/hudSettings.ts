@@ -14,6 +14,8 @@ export interface HudSettings {
   showTelemetry: boolean;
   /** Hold Ctrl+Space to record from the browser mic; release to send. */
   pushToTalk: boolean;
+  /** Read reminders and other server notifications aloud (needs TTS). */
+  speakNotifications: boolean;
 }
 
 export const HUD_SETTINGS_KEY = 'openjarvis-hud-settings';
@@ -25,6 +27,7 @@ export const HUD_DEFAULTS: HudSettings = {
   reducedMotion: false,
   showTelemetry: true,
   pushToTalk: true,
+  speakNotifications: true,
 };
 
 export function loadHudSettings(): HudSettings {
