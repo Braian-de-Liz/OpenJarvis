@@ -23,8 +23,10 @@ import {
   Mic, MicOff, Volume2, Headphones, Cpu, HardDrive, Wifi, Activity, Terminal, X,
   ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
   MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2, ShieldAlert,
-  Plus, Eraser, HelpCircle,
+  Plus, Eraser, HelpCircle, LayoutGrid, Brain,
 } from 'lucide-react';
+import { HudModules } from '../components/Jarvis/HudModules';
+import { HudMemory } from '../components/Jarvis/HudMemory';
 
 /**
  * JARVIS Mode - Cinematic HUD Interface
@@ -967,6 +969,13 @@ export function JARVISMode() {
                 status={voice.connected ? 'online' : 'offline'}
               />
             </div>
+          </HUDPanel>
+          <HUDPanel title="Módulos" icon={<LayoutGrid size={14} />} code="MOD·06" collapsible>
+            <HudModules
+              modules={[
+                { id: 'memory', label: 'Memória', icon: <Brain size={12} />, render: () => <HudMemory /> },
+              ]}
+            />
           </HUDPanel>
           <HUDPanel title="Ações Rápidas" icon={<Sparkles size={14} />} code="ACT·04" collapsible>
             <QuickActions onAction={handleSendMessage} disabled={chatStreaming} />
