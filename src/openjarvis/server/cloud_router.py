@@ -93,7 +93,8 @@ def get_provider(model: str) -> str | None:
 def is_cloud_model(model: str) -> bool:
     """Return True if the model is served by a cloud provider."""
     # "claude-code" is the Claude Code agent (login auth), never the paid API.
-    if model in ("claude-code", "claude-code-agent"):
+    # "claude-code:opus" (model picked in the HUD) is still the agent.
+    if model.partition(":")[0] in ("claude-code", "claude-code-agent"):
         return False
     return get_provider(model) is not None
 

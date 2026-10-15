@@ -209,8 +209,11 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # The HUD can switch between Ollama and Claude Code per request: the
     # "claude-code" model always runs the claude_code agent (plan login only),
     # whatever agent the server was started with.
-    if model in _CLAUDE_CODE_MODES:
-        agent = _claude_code_agent(request, model)
+    # "claude-code:opus" picks the Claude model; the suffix reaches the agent
+    # through ``agent._model`` (see ClaudeCodeAgent / claude_model_from).
+    claude_base = model.partition(":")[0]
+    if claude_base in _CLAUDE_CODE_MODES:
+        agent = _claude_code_agent(request, claude_base)
     # claude_code runs on the Claude Code login only. Always route it through
     # the agent (streaming or not, with or without client tools) so a request
     # can never fall through to the engine / direct cloud router, which could
@@ -771,6 +774,7 @@ async def _handle_agent_stream(
         agent_name = getattr(agent, "agent_id", None)
         live_types = (
             EventType.AGENT_TEXT_DELTA,
+            EventType.AGENT_MODEL_INFO,
             EventType.TOOL_CALL_START,
             EventType.TOOL_CALL_END,
         )
@@ -813,6 +817,9 @@ async def _handle_agent_stream(
                             choices=[StreamChoice(delta=DeltaMessage(content=text))],
                         )
                         yield f"data: {delta_chunk.model_dump_json()}\n\n"
+                elif event.event_type == EventType.AGENT_MODEL_INFO:
+                    info = {"model": str(event.data.get("model", ""))}
+                    yield f"event: model_info\ndata: {json.dumps(info)}\n\n"
                 else:
                     name = (
                         "tool_call_start"

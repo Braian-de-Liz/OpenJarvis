@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -52,6 +53,20 @@ if not _RUNNER_SRC.exists():
     _RUNNER_SRC = (
         Path(__file__).resolve().parents[2] / "_node_modules" / "claude_code_runner"
     )
+
+
+# Claude model picked in the HUD travels as a suffix of the request model:
+# "claude-code:opus" / "claude-code-agent:claude-sonnet-4-5". Only plain
+# model ids/aliases are accepted.
+_CLAUDE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]{0,63}$")
+
+
+def claude_model_from(model: str) -> str:
+    """Return the Claude model suffix of a ``claude-code[:model]`` id, or ''."""
+    _, sep, suffix = (model or "").partition(":")
+    if not sep or not _CLAUDE_MODEL_RE.match(suffix):
+        return ""
+    return suffix
 
 
 def _kill_process_tree(proc: "subprocess.Popen[str]") -> None:
@@ -224,6 +239,9 @@ class ClaudeCodeAgent(BaseAgent):
             "session_id": self._session_id,
             "mode": self._mode,
         }
+        claude_model = claude_model_from(self._model)
+        if claude_model:
+            request["model"] = claude_model
 
         try:
             if self._bus is not None:
@@ -382,7 +400,12 @@ class ClaudeCodeAgent(BaseAgent):
         except json.JSONDecodeError:
             return
         kind = event.get("type")
-        if kind == "text_delta":
+        if kind == "model":
+            self._bus.publish(
+                EventType.AGENT_MODEL_INFO,
+                {"agent": self.agent_id, "model": str(event.get("model", ""))},
+            )
+        elif kind == "text_delta":
             self._bus.publish(
                 EventType.AGENT_TEXT_DELTA,
                 {"agent": self.agent_id, "text": event.get("text", "")},

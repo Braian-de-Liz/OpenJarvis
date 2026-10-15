@@ -16,6 +16,10 @@ export interface HudSettings {
   pushToTalk: boolean;
   /** Read reminders and other server notifications aloud (needs TTS). */
   speakNotifications: boolean;
+  /** Claude model for Claude Code ("" = plan default, or "sonnet"/"opus"/"haiku"). */
+  claudeModel: string;
+  /** Model Claude Code reported for the last answer (shown in the HUD). */
+  claudeModelInUse: string;
 }
 
 export const HUD_SETTINGS_KEY = 'openjarvis-hud-settings';
@@ -28,6 +32,8 @@ export const HUD_DEFAULTS: HudSettings = {
   showTelemetry: true,
   pushToTalk: true,
   speakNotifications: true,
+  claudeModel: '',
+  claudeModelInUse: '',
 };
 
 export function loadHudSettings(): HudSettings {

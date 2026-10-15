@@ -775,3 +775,71 @@ class TestChatMode:
         assert 'request.mode === "chat"' in text
         assert "options.tools = []" in text
         assert "options.settingSources = []" in text
+
+
+class TestClaudeModelChoice:
+    """The HUD picks the Claude model via a suffix: ``claude-code:opus``."""
+
+    @pytest.mark.parametrize(
+        ("model", "expected"),
+        [
+            ("claude-code", ""),
+            ("claude-code:opus", "opus"),
+            ("claude-code-agent:claude-sonnet-4-5", "claude-sonnet-4-5"),
+            ("claude-code:", ""),
+            ("claude-code:opus; rm -rf /", ""),  # not a model id
+            ("claude-code:" + "x" * 80, ""),
+        ],
+    )
+    def test_claude_model_from(self, model, expected):
+        from openjarvis.agents.claude_code import claude_model_from
+
+        assert claude_model_from(model) == expected
+
+    def _request(self, agent_model):
+        engine = MagicMock()
+        engine.engine_id = "mock"
+        agent = ClaudeCodeAgent(engine, agent_model)
+        proc = _mock_proc(
+            stdout=_wrap_output({"content": "ok", "tool_results": [], "metadata": {}})
+        )
+        with (
+            patch.object(agent, "_ensure_runner", return_value="/fake"),
+            patch("subprocess.run", return_value=proc) as run,
+        ):
+            agent.run("oi")
+        return json.loads(run.call_args.kwargs["input"])
+
+    def test_suffix_is_sent_as_the_runner_model(self):
+        assert self._request("claude-code:opus")["model"] == "opus"
+
+    def test_no_suffix_keeps_the_plan_default(self):
+        assert "model" not in self._request("claude-code")
+
+    def test_runner_applies_the_model_and_reports_it(self):
+        text = _RUNNER_SRC.joinpath("index.mjs").read_text(encoding="utf-8")
+        assert "options.model = request.model" in text
+        assert 'emitEvent({ type: "model", model: message.model })' in text
+
+    def test_model_event_is_published(self, tmp_path):
+        script = _FAKE_RUNNER.replace(
+            'print(P + json.dumps({"type": "text_delta", "text": "Ol"}), flush=True)',
+            'print(P + json.dumps({"type": "model", "model": "claude-opus-4-1"}),'
+            " flush=True)\n"
+            'print(P + json.dumps({"type": "text_delta", "text": "Ol"}), flush=True)',
+        )
+        bus = EventBus(record_history=True)
+        agent = _streaming_agent(tmp_path, script, bus)
+        with patch.object(agent, "_ensure_runner", return_value=tmp_path):
+            agent.run("hi")
+        infos = [
+            e.data for e in bus.history if e.event_type == EventType.AGENT_MODEL_INFO
+        ]
+        assert infos == [{"agent": "claude_code", "model": "claude-opus-4-1"}]
+
+    def test_suffixed_ids_are_never_cloud_models(self):
+        from openjarvis.server.cloud_router import is_cloud_model
+
+        assert not is_cloud_model("claude-code:opus")
+        assert not is_cloud_model("claude-code-agent:sonnet")
+        assert is_cloud_model("claude-sonnet-4-5")  # the paid API model still is

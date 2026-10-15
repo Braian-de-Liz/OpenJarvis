@@ -103,6 +103,10 @@ async function main() {
   if (request.session_id) {
     options.sessionId = request.session_id;
   }
+  if (request.model) {
+    // Claude model chosen in the HUD ("sonnet", "opus", "haiku" or a full id).
+    options.model = request.model;
+  }
   if (request.mode === "chat") {
     // Conversation mode: no tools, no user settings and a short system prompt.
     // This cuts the fixed per-message context from ~22k tokens to a few hundred.
@@ -119,6 +123,7 @@ async function main() {
   let messageCount = 0;
   let streamedText = false;
   let usage;
+  let modelInUse;
   const toolResults = [];
   const toolUseIndexes = new Map();
 
@@ -132,6 +137,10 @@ async function main() {
             `Refusing to run: credential source is "${message.apiKeySource}", ` +
               "not the Claude Code login. API keys are never used by OpenJarvis.",
           );
+        }
+        if (message.model) {
+          modelInUse = message.model;
+          emitEvent({ type: "model", model: message.model });
         }
       } else if (message.type === "stream_event" && !message.parent_tool_use_id) {
         const delta = message.event?.delta;
@@ -211,6 +220,7 @@ async function main() {
         message_count: messageCount,
         session_id: request.session_id || undefined,
         usage,
+        model: modelInUse,
       },
     });
   } catch (error) {

@@ -6,7 +6,7 @@ import { useVoiceEvents } from '../lib/useVoiceEvents';
 import { apiFetch, checkHealth, fetchModels } from '../lib/api';
 import { sendChatTurn } from '../lib/chatTurn';
 import { useHudSettings } from '../lib/hudSettings';
-import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, claudeModeOf, claudeModelFor, localModels, pickLocalModel, rememberLocalModel, sourceOf } from '../lib/aiSource';
+import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, CLAUDE_MODEL_OPTIONS, claudeModeOf, claudeModelFor, claudeModelLabel, isClaudeCode, localModels, pickLocalModel, rememberLocalModel, sourceOf } from '../lib/aiSource';
 import { useApprovalsStore } from '../lib/approvalsStore';
 import { toSpeakable } from '../lib/speakable';
 import { HudApprovals } from '../components/Jarvis/HudApprovals';
@@ -853,8 +853,12 @@ export function JARVISMode() {
             title="Trocar modelo"
           >
             <span className="text-zinc-500">MODELO</span>
-            <span className={`truncate max-w-[14rem] ${selectedModel ? 'text-cyan-200' : 'text-amber-300'}`}>
-              {selectedModel || 'NENHUM'}
+            <span className={`truncate max-w-[16rem] ${selectedModel ? 'text-cyan-200' : 'text-amber-300'}`}>
+              {!selectedModel
+                ? 'NENHUM'
+                : isClaudeCode(selectedModel)
+                  ? `CLAUDE ${claudeModeOf(selectedModel) === 'agent' ? 'AGENTE' : 'CONVERSA'} · ${claudeModelLabel(hud.claudeModelInUse, hud.claudeModel)}`
+                  : selectedModel}
             </span>
           </button>
           <div
@@ -1290,6 +1294,26 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
                     ? 'Agente: usa as ferramentas do Claude Code (ler arquivos, buscar). Gasta bem mais do limite — cerca de 22 mil tokens por mensagem.'
                     : 'Conversa: leve e rápida, sem ferramentas — cerca de 400 tokens por mensagem.'}
                 </span>
+                <label className="jarvis-field mt-3">
+                  Modelo do Claude
+                  <select
+                    className="jarvis-field-input"
+                    value={hud.claudeModel}
+                    disabled={isStreaming}
+                    onChange={(e) => updateHud({ claudeModel: e.target.value, claudeModelInUse: '' })}
+                  >
+                    {CLAUDE_MODEL_OPTIONS.map((o) => (
+                      <option key={o.value || 'default'} value={o.value}>
+                        {o.label} — {o.hint}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="jarvis-field-hint">
+                    {hud.claudeModelInUse
+                      ? `Em uso na última resposta: ${hud.claudeModelInUse}`
+                      : 'O modelo exato aparece aqui (e no topo) depois da próxima resposta.'}
+                  </span>
+                </label>
               </>
             )}
           </section>

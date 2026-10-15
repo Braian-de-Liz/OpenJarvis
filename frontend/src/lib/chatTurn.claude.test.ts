@@ -1,0 +1,100 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { SSEEvent } from '../types';
+
+class MemoryStorage {
+  private store = new Map<string, string>();
+  getItem(key: string): string | null {
+    return this.store.get(key) ?? null;
+  }
+  setItem(key: string, value: string): void {
+    this.store.set(key, String(value));
+  }
+  removeItem(key: string): void {
+    this.store.delete(key);
+  }
+}
+
+const sent: { model: string }[] = [];
+let events: SSEEvent[] = [];
+
+vi.mock('./sse', () => ({
+  streamChat: async function* (req: { model: string }) {
+    sent.push(req);
+    for (const ev of events) yield ev;
+  },
+}));
+vi.mock('./api', async (orig) => ({
+  ...(await orig<typeof import('./api')>()),
+  fetchSavings: () => Promise.reject(new Error('offline')),
+}));
+
+const chunk = (content: string, finish?: string): SSEEvent => ({
+  event: 'message',
+  data: JSON.stringify({ choices: [{ delta: { content }, finish_reason: finish ?? null }] }),
+});
+
+beforeEach(() => {
+  vi.resetModules();
+  (globalThis as unknown as { localStorage: MemoryStorage }).localStorage = new MemoryStorage();
+  sent.length = 0;
+  events = [];
+});
+
+afterEach(() => {
+  (globalThis as unknown as { localStorage?: MemoryStorage }).localStorage = undefined;
+});
+
+async function setup(model: string, claudeModel = '') {
+  const { useAppStore } = await import('./store');
+  const { useHudSettings } = await import('./hudSettings');
+  const { sendChatTurn } = await import('./chatTurn');
+  useAppStore.getState().setSelectedModel(model);
+  useHudSettings.getState().updateHud({ claudeModel });
+  return { useAppStore, useHudSettings, sendChatTurn };
+}
+
+describe('Claude model choice', () => {
+  it('sends the chosen Claude model as a suffix', async () => {
+    const { sendChatTurn } = await setup('claude-code', 'opus');
+    events = [chunk('oi', 'stop')];
+    await sendChatTurn('oi');
+    expect(sent[0].model).toBe('claude-code:opus');
+  });
+
+  it('keeps the plan default when no Claude model is chosen', async () => {
+    const { sendChatTurn } = await setup('claude-code-agent');
+    events = [chunk('oi', 'stop')];
+    await sendChatTurn('oi');
+    expect(sent[0].model).toBe('claude-code-agent');
+  });
+
+  it('never suffixes local models', async () => {
+    const { sendChatTurn } = await setup('llama3.2:1b', 'opus');
+    events = [chunk('oi', 'stop')];
+    await sendChatTurn('oi');
+    expect(sent[0].model).toBe('llama3.2:1b');
+  });
+
+  it('records the model Claude Code reports and shows it in telemetry', async () => {
+    const { sendChatTurn, useHudSettings, useAppStore } = await setup('claude-code', 'sonnet');
+    events = [
+      { event: 'model_info', data: JSON.stringify({ model: 'claude-sonnet-4-5' }) },
+      chunk('Olá', 'stop'),
+    ];
+    await sendChatTurn('oi');
+    expect(useHudSettings.getState().hud.claudeModelInUse).toBe('claude-sonnet-4-5');
+    expect(useAppStore.getState().messages[1].telemetry?.model_id).toBe('claude-code · claude-sonnet-4-5');
+  });
+});
+
+describe('aiSource helpers', () => {
+  it('builds request ids and labels', async () => {
+    const { requestModel, claudeModelLabel } = await import('./aiSource');
+    expect(requestModel('claude-code', 'haiku')).toBe('claude-code:haiku');
+    expect(requestModel('claude-code', '')).toBe('claude-code');
+    expect(requestModel('qwen2.5:7b', 'opus')).toBe('qwen2.5:7b');
+    expect(claudeModelLabel('claude-opus-4-1', 'opus')).toBe('claude-opus-4-1');
+    expect(claudeModelLabel('', 'opus')).toBe('Opus');
+    expect(claudeModelLabel('', '')).toBe('Padrão do plano');
+  });
+});

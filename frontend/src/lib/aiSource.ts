@@ -51,3 +51,22 @@ export function pickLocalModel(models: { id: string }[]): string {
   }
   return local.find((m) => m.id === remembered)?.id ?? local[0]?.id ?? '';
 }
+
+/** Claude models offered in the HUD ("" keeps the Claude Code plan default). */
+export const CLAUDE_MODEL_OPTIONS: { value: string; label: string; hint: string }[] = [
+  { value: '', label: 'Padrão do plano', hint: 'o que o seu Claude Code usa por padrão' },
+  { value: 'sonnet', label: 'Sonnet', hint: 'equilibrado' },
+  { value: 'opus', label: 'Opus', hint: 'mais capaz, gasta mais do limite' },
+  { value: 'haiku', label: 'Haiku', hint: 'mais rápido e econômico' },
+];
+
+/** Model id sent to the server: "claude-code:opus" when a Claude model is chosen. */
+export function requestModel(model: string, claudeModel: string): string {
+  return isClaudeCode(model) && claudeModel ? `${model}:${claudeModel}` : model;
+}
+
+/** Short label for the Claude model in use, e.g. "claude-opus-4-1" or "Opus". */
+export function claudeModelLabel(inUse: string, chosen: string): string {
+  if (inUse) return inUse;
+  return CLAUDE_MODEL_OPTIONS.find((o) => o.value === chosen)?.label ?? chosen;
+}

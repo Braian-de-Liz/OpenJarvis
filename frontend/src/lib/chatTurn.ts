@@ -4,6 +4,8 @@ import { fetchSavings } from './api';
 import { serializeToolCallArguments } from './tool-call';
 import { engineFromCompletionChunk, resolveChatEngine } from './chat-telemetry';
 import type { ChatMessage, MessageTelemetry, TokenUsage, ToolCallInfo } from '../types';
+import { useHudSettings } from './hudSettings';
+import { isClaudeCode, requestModel } from './aiSource';
 
 export interface ChatTurnResult {
   conversationId: string;
@@ -31,6 +33,8 @@ export async function sendChatTurn(
 
   const convId = store.activeId ?? store.createConversation(model);
   const { temperature, maxTokens } = store.settings;
+  // Claude Code: the HUD's Claude model choice rides on the model id.
+  const sentModel = requestModel(model, useHudSettings.getState().hud.claudeModel);
 
   const userMsg: ChatMessage = { id: generateId(), role: 'user', content, timestamp: Date.now() };
   store.addMessage(convId, userMsg);
@@ -58,6 +62,7 @@ export async function sendChatTurn(
   let usage: TokenUsage | undefined;
   let routedEngine: string | undefined;
   let ttftMs: number | undefined;
+  let modelInUse: string | undefined;
   let aborted = false;
   let lastFlush = 0;
   const toolCalls: ToolCallInfo[] = [];
@@ -66,7 +71,7 @@ export async function sendChatTurn(
 
   try {
     for await (const ev of streamChat(
-      { model, messages: apiMessages, stream: true, temperature, max_tokens: maxTokens },
+      { model: sentModel, messages: apiMessages, stream: true, temperature, max_tokens: maxTokens },
       signal,
     )) {
       if (ev.event === 'agent_turn_start') {
@@ -84,6 +89,14 @@ export async function sendChatTurn(
           });
           store.setStreamState({ phase: `Calling ${data.tool}...`, activeToolCalls: [...toolCalls] });
           update([...toolCalls]);
+        } catch {}
+      } else if (ev.event === 'model_info') {
+        // Claude Code reports which Claude model actually answered.
+        try {
+          modelInUse = String(JSON.parse(ev.data).model || '') || undefined;
+          if (modelInUse && isClaudeCode(model)) {
+            useHudSettings.getState().updateHud({ claudeModelInUse: modelInUse });
+          }
         } catch {}
       } else if (ev.event === 'tool_call_end') {
         try {
@@ -137,7 +150,7 @@ export async function sendChatTurn(
         selectedModel: model,
         selectedOwner: appState.models.find((m) => m.id === model)?.owned_by,
       }),
-      model_id: model,
+      model_id: modelInUse ? `${model} · ${modelInUse}` : model,
       total_ms: totalMs,
       ttft_ms: ttftMs,
       tokens_per_sec: usage?.completion_tokens ? usage.completion_tokens / (totalMs / 1000) : undefined,
