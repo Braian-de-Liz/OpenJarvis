@@ -71,6 +71,83 @@ def is_exit_phrase(text: str) -> bool:
     return bool(_EXIT_RE.match(_normalize(text)))
 
 
+# How Whisper tends to spell "Jarvis" from short, unprompted clips.
+_WAKE_WORDS = frozenset(
+    {"jarvis", "jarves", "jarvas", "jarvys", "jarviz", "djarvis", "javis", "jervis"}
+)
+_WAKE_MAX_WORDS = 4  # "ok jarvis", "ei jarvis acorda" — not a sentence about him
+
+
+def is_wake_phrase(text: str) -> bool:
+    """True for a short utterance that calls Jarvis ("Jarvis", "ei, Jarvis").
+
+    Long sentences that merely mention him ("o jarvis do filme é legal") are
+    ignored so background conversation does not wake the assistant.
+    """
+    words = _normalize(text).split()
+    return 0 < len(words) <= _WAKE_MAX_WORDS and any(w in _WAKE_WORDS for w in words)
+
+
+class SpeechSegmenter:
+    """Cut short voiced segments out of a chunk stream (pure, testable).
+
+    Feed it ``(pcm_chunk, rms)`` pairs. A segment starts after
+    ``min_voiced`` loud chunks (plus a little pre-roll) and ends after
+    ``silence`` quiet chunks; it is returned only if it lasted at most
+    ``max_chunks`` — wake phrases are short, so long talk is dropped.
+    """
+
+    def __init__(
+        self,
+        threshold: float,
+        *,
+        min_voiced: int = 3,
+        silence: int = 8,
+        max_chunks: int = 50,
+        preroll: int = 4,
+    ) -> None:
+        self.threshold = threshold
+        self._min_voiced = min_voiced
+        self._silence = silence
+        self._max_chunks = max_chunks
+        self._preroll: deque[bytes] = deque(maxlen=preroll)
+        self._frames: list[bytes] = []
+        self._voiced = 0
+        self._quiet = 0
+        self._active = False
+        self._too_long = False
+
+    def feed(self, chunk: bytes, amplitude: float) -> Optional[list[bytes]]:
+        loud = amplitude > self.threshold
+        if not self._active:
+            self._preroll.append(chunk)
+            self._voiced = self._voiced + 1 if loud else 0
+            if self._voiced >= self._min_voiced:
+                self._active = True
+                self._frames = list(self._preroll)
+                self._preroll.clear()
+                self._quiet = 0
+            return None
+
+        self._frames.append(chunk)
+        self._quiet = 0 if loud else self._quiet + 1
+        if len(self._frames) > self._max_chunks:
+            self._too_long = True
+        if self._quiet < self._silence:
+            return None
+
+        frames, too_long = self._frames, self._too_long
+        self._reset()
+        return None if too_long else frames
+
+    def _reset(self) -> None:
+        self._frames = []
+        self._voiced = 0
+        self._quiet = 0
+        self._active = False
+        self._too_long = False
+
+
 # Whisper invents these on near-silence / noise, especially in Portuguese.
 _HALLUCINATIONS = {
     "legendas pela comunidade amara org",
@@ -511,10 +588,12 @@ class HandsFreeSession:
 __all__ = [
     "DEFAULT_IDLE_TIMEOUT",
     "HandsFreeSession",
+    "SpeechSegmenter",
     "VoiceEventPublisher",
     "is_affirmative",
     "is_exit_phrase",
     "is_noise_transcript",
+    "is_wake_phrase",
     "record_utterance",
     "threshold_from_ambient",
     "wav_envelope",

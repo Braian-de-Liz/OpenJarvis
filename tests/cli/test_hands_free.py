@@ -262,3 +262,55 @@ def test_publisher_posts_to_relay(monkeypatch):
             {"Authorization": "Bearer k"},
         )
     ]
+
+
+# ---------------------------------------------------------------------------
+# Wake word
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["Jarvis", "Jarvis.", "Ei, Jarvis!", "ok jarvis", "Jarvas?", "Djarvis acorda"],
+)
+def test_wake_phrase_accepts_short_calls(text):
+    assert hf.is_wake_phrase(text)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "obrigado por assistir",
+        "o jarvis do filme é muito legal mesmo",  # a sentence about him
+        "Travis",
+    ],
+)
+def test_wake_phrase_rejects_other_speech(text):
+    assert not hf.is_wake_phrase(text)
+
+
+def _feed(seg, pattern):
+    """Feed loud ('L') / quiet ('q') chunks; return emitted segments."""
+    out = []
+    for i, c in enumerate(pattern):
+        chunk = bytes([i % 256, 0])
+        got = seg.feed(chunk, 1000.0 if c == "L" else 0.0)
+        if got is not None:
+            out.append(got)
+    return out
+
+
+def test_segmenter_emits_short_utterance_with_preroll():
+    seg = hf.SpeechSegmenter(100, min_voiced=3, silence=2, max_chunks=20, preroll=4)
+    segments = _feed(seg, "qq" + "LLLL" + "qq")
+    assert len(segments) == 1
+    # pre-roll holds the last 4 chunks (1 quiet + 3 voiced) + 1 voiced + 2 quiet
+    assert len(segments[0]) == 7
+
+
+def test_segmenter_ignores_blips_and_drops_long_talk():
+    seg = hf.SpeechSegmenter(100, min_voiced=3, silence=2, max_chunks=5, preroll=2)
+    assert _feed(seg, "LqLq" * 3) == []  # never 3 loud chunks in a row
+    assert _feed(seg, "L" * 12 + "qq") == []  # longer than max_chunks
+    assert len(_feed(seg, "LLL" + "qq")) == 1  # and it recovers afterwards

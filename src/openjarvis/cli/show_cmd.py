@@ -3,6 +3,7 @@ toca jingle, abre interface web e inicia chat por voz."""
 
 from __future__ import annotations
 
+import logging
 import os
 import socket
 import subprocess
@@ -10,12 +11,13 @@ import sys
 import time
 import webbrowser
 from pathlib import Path
-from typing import IO, Optional
+from typing import IO, Any, Callable, Optional
 
 import click
 from rich.console import Console
 
 console = Console(stderr=True)
+logger = logging.getLogger(__name__)
 
 # Configurações padrão para detecção de palmas (sobrescritas por
 # JARVIS_CLAP_THRESH / JARVIS_MIC via ``envvar`` nas opções do click).
@@ -245,16 +247,121 @@ def _cleanup_server() -> None:
         _server_log = None
 
 
-def _listen_for_double_clap(
+WAKE_MODES = ("clap", "word", "both")
+
+
+class WakeDetector:
+    """Combine double-clap and "Jarvis" wake-word detection on one mic stream.
+
+    Pure and testable: feed ``(chunk, rms, now)``; ``transcribe`` turns a WAV
+    clip into text (faster-whisper in production). Returns a ``(kind, detail)``
+    event or ``None``. ``kind`` is ``"clap"`` (one clap; ``detail`` is the
+    count), ``"expired"``, ``"heard"`` (a short phrase that wasn't the wake
+    word), or the final triggers ``"double_clap"`` / ``"wake_word"``.
+    """
+
+    def __init__(
+        self,
+        mode: str,
+        *,
+        clap: Optional[ClapDetector] = None,
+        segmenter: Any = None,
+        transcribe: Optional[Callable[[bytes], str]] = None,
+        sample_rate: int = 16000,
+    ) -> None:
+        if mode not in WAKE_MODES:
+            raise ValueError(f"unknown wake mode: {mode}")
+        self.mode = mode
+        self._clap = clap if mode in ("clap", "both") else None
+        self._segmenter = segmenter if mode in ("word", "both") else None
+        self._transcribe = transcribe
+        self._sample_rate = sample_rate
+
+    def feed(self, chunk: bytes, amplitude: float, now: float):
+        if self._clap is not None:
+            event = self._clap.feed(amplitude, now)
+            if event == "clap":
+                if self._clap.count >= 2:
+                    self._clap.reset()
+                    return ("double_clap", None)
+                return ("clap", self._clap.count)
+            if event == "expired":
+                return ("expired", None)
+
+        if self._segmenter is not None and self._transcribe is not None:
+            frames = self._segmenter.feed(chunk, amplitude)
+            if frames:
+                from openjarvis.cli._hands_free import is_wake_phrase
+                from openjarvis.speech.voice_io import _frames_to_wav
+
+                try:
+                    text = self._transcribe(_frames_to_wav(frames, self._sample_rate))
+                except Exception:
+                    logger.debug("wake-word transcription failed", exc_info=True)
+                    return None
+                if is_wake_phrase(text):
+                    return ("wake_word", text)
+                if text.strip():
+                    return ("heard", text)
+        return None
+
+
+# Wake checks run on every short phrase, so they use Whisper "tiny" on CPU:
+# ~0.4 s per clip warm, against 4-9 s for the default "base" on a busy CPU.
+# The conversation itself keeps using the configured (larger) model.
+WAKE_STT_MODEL = "tiny"
+
+
+def _wake_word_transcriber(
+    language: Optional[str],
+) -> Optional[Callable[[bytes], str]]:
+    """Load a small STT model for wake-word checks, warmed up once."""
+    backend: Any = None
+    try:
+        from openjarvis.speech.faster_whisper import FasterWhisperBackend
+
+        backend = FasterWhisperBackend(
+            WAKE_STT_MODEL, device="cpu", compute_type="int8"
+        )
+    except Exception:
+        logger.debug("faster-whisper tiny unavailable; using config", exc_info=True)
+        try:
+            from openjarvis.core.config import load_config
+            from openjarvis.speech._discovery import get_speech_backend
+
+            backend = get_speech_backend(load_config())
+        except Exception:
+            logger.debug("STT backend unavailable for wake word", exc_info=True)
+            return None
+    if backend is None:
+        return None
+
+    def transcribe(wav: bytes) -> str:
+        return backend.transcribe(wav, format="wav", language=language).text or ""
+
+    # First call loads the model (seconds); do it before listening.
+    from openjarvis.speech.voice_io import _frames_to_wav
+
+    try:
+        transcribe(_frames_to_wav([b"\x00\x00" * 1600], 16000))
+    except Exception:
+        logger.debug("wake-word STT warm-up failed", exc_info=True)
+        return None
+    return transcribe
+
+
+def _listen_for_wake(
+    mode: str = "clap",
     threshold: int = DEFAULT_CLAP_THRESHOLD,
     mic_device: Optional[int] = None,
     sample_rate: int = 16000,
     chunk: int = 1024,
     clap_window: float = 1.0,  # segundos entre duas palmas
-) -> bool:
-    """
-    Ouve o microfone e detecta duas palmas em sequência.
-    Retorna True quando detecta duas palmas.
+) -> Optional[str]:
+    """Ouve o microfone até detectar duas palmas e/ou a palavra "Jarvis".
+
+    Retorna ``"double_clap"`` ou ``"wake_word"``; ``None`` se não houver
+    microfone/STT para o modo pedido.
     """
     try:
         import sounddevice as sd
@@ -262,17 +369,55 @@ def _listen_for_double_clap(
         console.print(
             "[red]sounddevice não instalado. Rode: uv sync --extra voice[/red]"
         )
-        return False
+        return None
 
-    console.print(
-        f"[dim]Ouvindo microfone... (threshold={threshold}, "
-        f"device={mic_device or 'default'})[/dim]"
+    from openjarvis.cli._hands_free import (
+        SpeechSegmenter,
+        measure_ambient,
+        threshold_from_ambient,
     )
-    console.print("[dim]Bata duas palmas seguidas para ativar.[/dim]")
-
     from openjarvis.speech.voice_io import _rms
 
-    detector = ClapDetector(threshold, window=clap_window)
+    segmenter = None
+    transcribe = None
+    if mode in ("word", "both"):
+        from openjarvis.cli._voice_chat import VoiceSession
+
+        transcribe = _wake_word_transcriber(VoiceSession().get_stt_language())
+        if transcribe is None:
+            console.print(
+                "[red]Wake word precisa de um backend de STT (faster-whisper).[/red]"
+            )
+            if mode == "word":
+                return None
+            mode = "clap"
+        else:
+            try:
+                speech_threshold = threshold_from_ambient(
+                    measure_ambient(device=mic_device)
+                )
+            except Exception:
+                speech_threshold = threshold_from_ambient(0)
+            segmenter = SpeechSegmenter(speech_threshold)
+
+    hints = {
+        "clap": "Bata duas palmas seguidas para ativar.",
+        "word": 'Diga "Jarvis" para ativar.',
+        "both": 'Bata duas palmas ou diga "Jarvis" para ativar.',
+    }
+    console.print(
+        f"[dim]Ouvindo microfone... (palmas={threshold}, "
+        f"device={mic_device or 'default'})[/dim]"
+    )
+    console.print(f"[dim]{hints[mode]}[/dim]")
+
+    detector = WakeDetector(
+        mode,
+        clap=ClapDetector(threshold, window=clap_window),
+        segmenter=segmenter,
+        transcribe=transcribe,
+        sample_rate=sample_rate,
+    )
     with sd.RawInputStream(
         samplerate=sample_rate,
         channels=1,
@@ -282,18 +427,25 @@ def _listen_for_double_clap(
     ) as stream:
         while True:
             raw, _ = stream.read(chunk)
-            amplitude = _rms(bytes(raw))
-            event = detector.feed(amplitude, time.monotonic())
-            if event == "clap":
+            data = bytes(raw)
+            amplitude = _rms(data)
+            event = detector.feed(data, amplitude, time.monotonic())
+            if event is None:
+                continue
+            kind, detail = event
+            if kind in ("double_clap", "wake_word"):
+                return kind
+            if kind == "clap":
                 console.print(
-                    f"[green]Palma {detector.count} detectada![/green] "
-                    f"(RMS={amplitude:.0f})"
+                    f"[green]Palma {detail} detectada![/green] (RMS={amplitude:.0f})"
                 )
-                if detector.count >= 2:
-                    return True
-            elif event == "expired":
+            elif kind == "expired":
                 console.print(
                     "[dim]Janela de palmas expirada. Aguardando nova sequência...[/dim]"
+                )
+            elif kind == "heard":
+                console.print(
+                    f"[dim]Ouvi: {detail!r} (não é a palavra de ativação)[/dim]"
                 )
 
 
@@ -369,6 +521,18 @@ def _listen_for_double_clap(
     show_default=True,
     help="Segundos de silêncio até a sessão de voz encerrar e voltar às palmas",
 )
+@click.option(
+    "--wake",
+    type=click.Choice(WAKE_MODES),
+    default="clap",
+    envvar="JARVIS_WAKE",
+    show_default=True,
+    help=(
+        'Como ativar: palmas, a palavra "Jarvis" ou ambos. "word"/"both" '
+        "transcrevem trechos curtos de fala continuamente (usa mais CPU). "
+        "Variável de ambiente: JARVIS_WAKE"
+    ),
+)
 def show(
     threshold: int,
     mic: Optional[int],
@@ -379,6 +543,7 @@ def show(
     frontend_port: int,
     web_path: str,
     idle_timeout: float,
+    wake: str,
 ) -> None:
     """Ativação por duas palmas: ouve o microfone, detecta duas palmas seguidas,
     toca jingle (se existir), abre interface web e inicia chat por voz.
@@ -387,7 +552,10 @@ def show(
       JARVIS_CLAP_THRESH  Sensibilidade (padrão: 1500)
       JARVIS_MIC          ID do microfone (padrão: dispositivo padrão)
     """
-    console.print("[bold green]🔊 jarvis-show — Ativação por palmas[/bold green]")
+    mode_label = {"clap": "palmas", "word": '"Jarvis"', "both": 'palmas ou "Jarvis"'}
+    console.print(
+        f"[bold green]🔊 jarvis-show — Ativação por {mode_label[wake]}[/bold green]"
+    )
     console.print(
         f"  Threshold: {threshold}  |  Mic: {mic or 'default'}  "
         f"|  Janela: {clap_window}s"
@@ -408,15 +576,18 @@ def show(
         # Loop principal: espera duas palmas
         while True:
             events.state("idle")
-            detected = _listen_for_double_clap(
+            detected = _listen_for_wake(
+                wake,
                 threshold=threshold,
                 mic_device=mic,
                 clap_window=clap_window,
             )
+            if detected is None:
+                return
             if detected:
+                what = "Duas palmas" if detected == "double_clap" else '"Jarvis"'
                 console.print(
-                    "[bold green]✨ Duas palmas detectadas! "
-                    "Ativando Jarvis...[/bold green]"
+                    f"[bold green]✨ {what} detectado! Ativando Jarvis...[/bold green]"
                 )
                 events.state("activated")
 
