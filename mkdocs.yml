@@ -188,6 +188,7 @@ nav:
       - Scheduled Monitor: user-guide/scheduled-monitor.md
       - Simple Chat: user-guide/chat-simple.md
       - JARVIS Mode (Hands-Free + HUD): user-guide/jarvis-mode.md
+      - JARVIS Voice Setup (Claude Code): user-guide/jarvis-voice-setup.md
       - Agents: user-guide/agents.md
       - Channels & Connectors: user-guide/channels-and-connectors.md
       - Tools: user-guide/tools.md

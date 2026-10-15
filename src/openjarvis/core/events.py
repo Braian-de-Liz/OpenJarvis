@@ -33,6 +33,7 @@ class EventType(str, Enum):
     CHAT_EXCHANGE_COMPLETED = "chat_exchange_completed"
     AGENT_TURN_START = "agent_turn_start"
     AGENT_TURN_END = "agent_turn_end"
+    AGENT_TEXT_DELTA = "agent_text_delta"
     TELEMETRY_RECORD = "telemetry_record"
     TRACE_STEP = "trace_step"
     TRACE_COMPLETE = "trace_complete"

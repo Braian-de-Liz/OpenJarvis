@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
+import shutil
 import threading
 import uuid
 import weakref
@@ -13,6 +16,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from openjarvis.core.events import EventType
 from openjarvis.core.paths import get_config_dir
 from openjarvis.core.types import Message, Role, ToolCall
 from openjarvis.server.model_capabilities import is_embed_only_model
@@ -155,16 +159,69 @@ def _ensure_identity_prompt(messages: list[Message], app_config) -> list[Message
     return [combined_system, *non_system_messages]
 
 
+CLAUDE_CODE_MODEL = "claude-code"  # conversation mode (light, no tools)
+CLAUDE_CODE_AGENT_MODEL = "claude-code-agent"  # agent mode (Claude Code tools)
+_CLAUDE_CODE_MODES = {CLAUDE_CODE_MODEL: "chat", CLAUDE_CODE_AGENT_MODEL: "agent"}
+_ANTHROPIC_CREDENTIAL_VARS = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
+def _claude_code_agent(request: Request, model: str = CLAUDE_CODE_MODEL):
+    """Return the shared claude_code agent for *model*, creating it on first use.
+
+    Refuses (HTTP 409) while an Anthropic API credential is present in the
+    environment, so the Claude Code option can never be billed per token.
+    """
+    present = [v for v in _ANTHROPIC_CREDENTIAL_VARS if os.environ.get(v)]
+    if present:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Claude Code desativado: {', '.join(present)} está definida. "
+                "Remova a chave de API e reinicie o servidor; o Claude Code só "
+                "usa o login do seu plano."
+            ),
+        )
+    state = request.app.state
+    mode = _CLAUDE_CODE_MODES[model]
+    agents = getattr(state, "claude_code_agents", None)
+    if agents is None:
+        agents = state.claude_code_agents = {}
+    agent = agents.get(mode)
+    if agent is None:
+        from openjarvis.agents.claude_code import ClaudeCodeAgent
+
+        agent = ClaudeCodeAgent(
+            state.engine,
+            model,
+            bus=getattr(state, "bus", None),
+            mode=mode,
+        )
+        agents[mode] = agent
+    return agent
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(request_body: ChatCompletionRequest, request: Request):
     """Handle chat completion requests (streaming and non-streaming)."""
     engine = request.app.state.engine
     agent = getattr(request.app.state, "agent", None)
     model = request_body.model
-    use_server_agent = (
-        agent is not None
-        and not request_body.tools
-        and (not request_body.stream or bool(getattr(agent, "_tools", None)))
+    # The HUD can switch between Ollama and Claude Code per request: the
+    # "claude-code" model always runs the claude_code agent (plan login only),
+    # whatever agent the server was started with.
+    if model in _CLAUDE_CODE_MODES:
+        agent = _claude_code_agent(request, model)
+    # claude_code runs on the Claude Code login only. Always route it through
+    # the agent (streaming or not, with or without client tools) so a request
+    # can never fall through to the engine / direct cloud router, which could
+    # use an Anthropic API key.
+    is_claude_code = getattr(agent, "agent_id", None) == "claude_code"
+    use_server_agent = agent is not None and (
+        is_claude_code
+        or (
+            not request_body.tools
+            and (not request_body.stream or bool(getattr(agent, "_tools", None)))
+        )
     )
 
     # Inject memory context into messages before dispatching
@@ -287,7 +344,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
         # configured server agent so its server-side tool loop is available
         # to the desktop UI and other stream:true clients (#735). Fall back to
         # direct token streaming when no tool-bearing agent is configured.
-        if request_body.tools:
+        if request_body.tools and not is_claude_code:
             return await _handle_stream_tools(
                 engine,
                 model,
@@ -707,8 +764,27 @@ async def _handle_agent_stream(
         )
         yield f"data: {first_chunk.model_dump_json()}\n\n"
 
-        try:
-            response = await asyncio.to_thread(
+        # Agents such as claude_code publish AGENT_TEXT_DELTA / tool events while
+        # they run; forward them live instead of waiting for the final answer.
+        live: asyncio.Queue = asyncio.Queue()
+        loop = asyncio.get_running_loop()
+        agent_name = getattr(agent, "agent_id", None)
+        live_types = (
+            EventType.AGENT_TEXT_DELTA,
+            EventType.TOOL_CALL_START,
+            EventType.TOOL_CALL_END,
+        )
+
+        def _on_live(event) -> None:
+            if event.data.get("agent") == agent_name:
+                loop.call_soon_threadsafe(live.put_nowait, event)
+
+        streamed_text = False
+        if bus is not None:
+            for et in live_types:
+                bus.subscribe(et, _on_live)
+        task = asyncio.ensure_future(
+            asyncio.to_thread(
                 _handle_agent,
                 agent,
                 model,
@@ -717,6 +793,39 @@ async def _handle_agent_stream(
                 trace_store=trace_store,
                 bus=bus,
             )
+        )
+        task.add_done_callback(
+            lambda _f: loop.call_soon_threadsafe(live.put_nowait, None)
+        )
+
+        try:
+            while True:
+                event = await live.get()
+                if event is None:
+                    break
+                if event.event_type == EventType.AGENT_TEXT_DELTA:
+                    text = event.data.get("text", "")
+                    if text:
+                        streamed_text = True
+                        delta_chunk = ChatCompletionChunk(
+                            id=chunk_id,
+                            model=model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=text))],
+                        )
+                        yield f"data: {delta_chunk.model_dump_json()}\n\n"
+                else:
+                    name = (
+                        "tool_call_start"
+                        if event.event_type == EventType.TOOL_CALL_START
+                        else "tool_call_end"
+                    )
+                    data = dict(event.data)
+                    if name == "tool_call_start" and not isinstance(
+                        data.get("arguments"), str
+                    ):
+                        data["arguments"] = json.dumps(data.get("arguments"))
+                    yield f"event: {name}\ndata: {json.dumps(data)}\n\n"
+            response = task.result()
         except Exception as exc:
             logging.getLogger("openjarvis.server").error(
                 "Agent stream error: %s",
@@ -738,9 +847,13 @@ async def _handle_agent_stream(
             yield f"data: {error_chunk.model_dump_json()}\n\n"
             yield "data: [DONE]\n\n"
             return
+        finally:
+            if bus is not None:
+                for et in live_types:
+                    bus.unsubscribe(et, _on_live)
 
         content = _response_content(response)
-        if content:
+        if content and not streamed_text:
             content_chunk = ChatCompletionChunk(
                 id=chunk_id,
                 model=model,
@@ -1131,6 +1244,17 @@ async def list_models(request: Request) -> ModelListResponse:
     # memory/retrieval via the embedder path; putting them in /v1/models made
     # the UI auto-select nomic-embed-text and fail every generation with 400.
     model_ids = [m for m in model_ids if not is_embed_only_model(m)]
+
+    # The claude_code agent ignores the engine and runs the Claude Agent SDK,
+    # so advertise it as the selectable "model" for the UI pickers.
+    # Claude Code is offered whenever Node is available, so the HUD can switch
+    # to it from any server; it runs on the user's plan login only.
+    agent = getattr(request.app.state, "agent", None)
+    is_claude_code = getattr(agent, "agent_id", None) == "claude_code"
+    if is_claude_code or shutil.which("node"):
+        for claude_model in _CLAUDE_CODE_MODES:
+            if claude_model not in model_ids:
+                model_ids.append(claude_model)
 
     return ModelListResponse(
         data=[

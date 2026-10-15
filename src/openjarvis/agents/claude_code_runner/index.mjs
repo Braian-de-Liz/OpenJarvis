@@ -9,6 +9,37 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const OUTPUT_START = "---OPENJARVIS_OUTPUT_START---";
 const OUTPUT_END = "---OPENJARVIS_OUTPUT_END---";
+// One JSON event per line, emitted while the query runs so the host can show
+// text and tool progress live. The final sentinel block below is unchanged.
+const EVENT_PREFIX = "---OJ_EVENT--- ";
+
+function emitEvent(event) {
+  console.log(EVENT_PREFIX + JSON.stringify(event));
+}
+
+// Credential sources other than the Claude Code login. All are removed so the
+// SDK cannot silently fall back to token billing (API key, third-party cloud
+// providers, custom endpoints, helper scripts).
+const BLOCKED_ENV = new Set([
+  "CLAUDE_CODE_OAUTH_TOKEN",
+  "CLAUDE_CODE_API_KEY_HELPER_TTL_MS",
+  "AWS_BEARER_TOKEN_BEDROCK",
+]);
+
+function scrubbedEnv(source) {
+  const env = {};
+  for (const [key, value] of Object.entries(source)) {
+    if (key.startsWith("ANTHROPIC_")) continue;
+    if (key.startsWith("CLAUDE_CODE_USE_")) continue;
+    if (BLOCKED_ENV.has(key)) continue;
+    env[key] = value;
+  }
+  return env;
+}
+
+// `apiKeySource` reported by the SDK's init message. "none" means the Claude
+// Code login (claude.ai) is the credential; anything else is a key source.
+const ALLOWED_KEY_SOURCES = new Set(["none", "oauth"]);
 
 function emitResult(response) {
   console.log(OUTPUT_START);
@@ -44,11 +75,22 @@ async function main() {
     return;
   }
 
-  if (request.api_key) {
-    process.env.ANTHROPIC_API_KEY = request.api_key;
+  // Subscription only: never bill an API key. The SDK then authenticates with
+  // the local Claude Code login (claude.ai account), so usage counts against
+  // the Claude Code plan limit. request.api_key is intentionally ignored.
+  const env = scrubbedEnv(process.env);
+  for (const key of Object.keys(process.env)) {
+    if (!(key in env)) delete process.env[key];
   }
 
-  const options = { maxTurns: 30 };
+  const options = {
+    maxTurns: 30,
+    includePartialMessages: true,
+    env,
+    // Do not load project/local settings: their `env` block or apiKeyHelper
+    // could inject an API key behind our back.
+    settingSources: ["user"],
+  };
   if (request.workspace) {
     options.cwd = request.workspace;
   }
@@ -61,9 +103,22 @@ async function main() {
   if (request.session_id) {
     options.sessionId = request.session_id;
   }
+  if (request.mode === "chat") {
+    // Conversation mode: no tools, no user settings and a short system prompt.
+    // This cuts the fixed per-message context from ~22k tokens to a few hundred.
+    options.tools = [];
+    options.settingSources = [];
+    options.maxTurns = 2;
+    delete options.allowedTools;
+    if (!options.systemPrompt) {
+      options.systemPrompt = "Responda de forma curta e direta.";
+    }
+  }
 
   let content = "";
   let messageCount = 0;
+  let streamedText = false;
+  let usage;
   const toolResults = [];
   const toolUseIndexes = new Map();
 
@@ -71,7 +126,30 @@ async function main() {
     for await (const message of query({ prompt: request.prompt, options })) {
       messageCount += 1;
 
-      if (message.type === "assistant") {
+      if (message.type === "system" && message.subtype === "init") {
+        if (!ALLOWED_KEY_SOURCES.has(message.apiKeySource)) {
+          throw new Error(
+            `Refusing to run: credential source is "${message.apiKeySource}", ` +
+              "not the Claude Code login. API keys are never used by OpenJarvis.",
+          );
+        }
+      } else if (message.type === "stream_event" && !message.parent_tool_use_id) {
+        const delta = message.event?.delta;
+        if (
+          message.event?.type === "content_block_start" &&
+          message.event.content_block?.type === "text"
+        ) {
+          // Separate text blocks from different turns (text, tool, more text).
+          if (streamedText) emitEvent({ type: "text_delta", text: "\n\n" });
+        } else if (
+          message.event?.type === "content_block_delta" &&
+          delta?.type === "text_delta" &&
+          delta.text
+        ) {
+          streamedText = true;
+          emitEvent({ type: "text_delta", text: delta.text });
+        }
+      } else if (message.type === "assistant") {
         const blocks = Array.isArray(message.message?.content)
           ? message.message.content
           : [];
@@ -79,6 +157,12 @@ async function main() {
           if (block.type === "text") {
             content = block.text;
           } else if (block.type === "tool_use") {
+            emitEvent({
+              type: "tool_start",
+              id: block.id,
+              tool: block.name,
+              input: block.input,
+            });
             toolUseIndexes.set(block.id, toolResults.length);
             toolResults.push({
               tool_name: block.name,
@@ -95,6 +179,12 @@ async function main() {
           if (block.type !== "tool_result") {
             continue;
           }
+          emitEvent({
+            type: "tool_end",
+            id: block.tool_use_id,
+            success: !block.is_error,
+            content: serializeContent(block.content).slice(0, 2000),
+          });
           const index = toolUseIndexes.get(block.tool_use_id);
           if (index !== undefined) {
             toolResults[index].content = serializeContent(block.content);
@@ -110,6 +200,7 @@ async function main() {
           throw new Error(errorMessage || "Claude query failed");
         }
         content = message.result || content;
+        usage = message.usage;
       }
     }
 
@@ -119,6 +210,7 @@ async function main() {
       metadata: {
         message_count: messageCount,
         session_id: request.session_id || undefined,
+        usage,
       },
     });
   } catch (error) {

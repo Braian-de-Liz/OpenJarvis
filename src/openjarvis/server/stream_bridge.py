@@ -34,6 +34,10 @@ _EVENT_MAP = {
     EventType.TOOL_CALL_END: "tool_call_end",
 }
 
+# Agents that stream text while running (e.g. claude_code) publish this; it is
+# sent as normal OpenAI-style content deltas rather than as a named event.
+_TEXT_DELTA = EventType.AGENT_TEXT_DELTA
+
 # Sentinel signalling that the agent thread has finished
 _DONE = object()
 
@@ -99,7 +103,7 @@ class AgentStreamBridge:
 
     def _subscribe_all(self) -> None:
         """Subscribe to all relevant EventBus event types."""
-        for et in _EVENT_MAP:
+        for et in (*_EVENT_MAP, _TEXT_DELTA):
             self._bus.subscribe(et, self._make_callback(et))
 
     def _unsubscribe_all(self) -> None:
@@ -180,13 +184,24 @@ class AgentStreamBridge:
             yield f"data: {first_chunk.model_dump_json()}\n\n"
 
             # Drain queue until the agent finishes
+            streamed_text = False
             while True:
                 item = await self._queue.get()
 
                 if item is _DONE:
                     break
 
-                if isinstance(item, Event):
+                if isinstance(item, Event) and item.event_type == _TEXT_DELTA:
+                    text = item.data.get("text", "")
+                    if text:
+                        streamed_text = True
+                        delta_chunk = ChatCompletionChunk(
+                            id=self._chunk_id,
+                            model=self._model,
+                            choices=[StreamChoice(delta=DeltaMessage(content=text))],
+                        )
+                        yield f"data: {delta_chunk.model_dump_json()}\n\n"
+                elif isinstance(item, Event):
                     sse_name = _EVENT_MAP.get(item.event_type)
                     if sse_name:
                         yield self._format_named_event(sse_name, item.data)
@@ -254,7 +269,7 @@ class AgentStreamBridge:
             # in chunks so the OpenAI-compatible streaming response stays
             # consistent with the completed agent run.
             content = agent_result.content or ""
-            if content:
+            if content and not streamed_text:
                 words = content.split(" ")
                 for i, word in enumerate(words):
                     token = word if i == 0 else " " + word

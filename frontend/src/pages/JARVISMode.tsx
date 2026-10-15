@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { useAppStore } from '../lib/store';
 import { useVoiceEvents } from '../lib/useVoiceEvents';
-import { apiFetch, checkHealth } from '../lib/api';
+import { apiFetch, checkHealth, fetchModels } from '../lib/api';
 import { sendChatTurn } from '../lib/chatTurn';
 import { useHudSettings } from '../lib/hudSettings';
+import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, claudeModeOf, claudeModelFor, localModels, pickLocalModel, rememberLocalModel, sourceOf } from '../lib/aiSource';
 import { useApprovalsStore } from '../lib/approvalsStore';
 import { toSpeakable } from '../lib/speakable';
 import { HudApprovals } from '../components/Jarvis/HudApprovals';
@@ -1109,8 +1110,42 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
   const modelsLoading = useAppStore((s) => s.modelsLoading);
   const selectedModel = useAppStore((s) => s.selectedModel);
   const setSelectedModel = useAppStore((s) => s.setSelectedModel);
+  const setModels = useAppStore((s) => s.setModels);
   const isStreaming = useAppStore((s) => s.streamState.isStreaming);
   const [name, setName] = useState(hud.userName);
+
+  // The model list is otherwise loaded once at startup, so a server that
+  // (re)started afterwards would leave Claude Code unselectable. Refresh it
+  // whenever the drawer opens.
+  useEffect(() => {
+    fetchModels().then(setModels).catch(() => {});
+  }, [setModels]);
+  const source = sourceOf(selectedModel);
+  const hasClaudeCode = models.some((m) => m.id === CLAUDE_CODE_MODEL);
+  const hasAgentMode = models.some((m) => m.id === CLAUDE_CODE_AGENT_MODEL);
+  const claudeMode = claudeModeOf(selectedModel);
+
+  const chooseClaudeMode = (mode: 'chat' | 'agent') => {
+    const model = claudeModelFor(mode);
+    if (model === selectedModel) return;
+    setSelectedModel(model);
+    updateSettings({ defaultModel: model });
+  };
+  const hasLocal = localModels(models).length > 0;
+
+  const chooseSource = (next: 'ollama' | 'claude-code') => {
+    if (next === source) return;
+    let model = '';
+    if (next === 'claude-code') {
+      rememberLocalModel(selectedModel);
+      model = CLAUDE_CODE_MODEL;
+    } else {
+      model = pickLocalModel(models);
+    }
+    if (!model) return;
+    setSelectedModel(model);
+    updateSettings({ defaultModel: model });
+  };
 
   const commitName = () => {
     const trimmed = name.trim();
@@ -1150,20 +1185,86 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
           </section>
 
           <section className="jarvis-drawer-section">
+            <h4>Fonte de IA</h4>
+            <div className="flex gap-2" role="radiogroup" aria-label="Fonte de IA">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={source === 'ollama'}
+                disabled={isStreaming || !hasLocal}
+                onClick={() => chooseSource('ollama')}
+                className={`jarvis-pill flex-1 justify-center ${source === 'ollama' ? 'border-cyan-400/60 text-cyan-200' : 'text-zinc-400'}`}
+                title={hasLocal ? 'Modelos locais (Ollama)' : 'Nenhum modelo local disponível'}
+              >
+                OLLAMA
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={source === 'claude-code'}
+                disabled={isStreaming || !hasClaudeCode}
+                onClick={() => chooseSource('claude-code')}
+                className={`jarvis-pill flex-1 justify-center ${source === 'claude-code' ? 'border-purple-400/60 text-purple-200' : 'text-zinc-400'}`}
+                title={hasClaudeCode ? 'Claude Code (login do seu plano)' : 'Indisponível — o servidor não ofereceu o modelo claude-code (precisa do Node.js)'}
+              >
+                CLAUDE CODE
+              </button>
+            </div>
+            <span className="jarvis-field-hint">
+              {source === 'claude-code'
+                ? 'Usa o login do seu plano Claude, sem chave de API. Cada mensagem consome do limite do plano.'
+                : 'Roda local, sem custo e sem limite de plano.'}
+            </span>
+            {source === 'claude-code' && (
+              <>
+                <div className="flex gap-2 mt-2" role="radiogroup" aria-label="Modo do Claude Code">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={claudeMode === 'chat'}
+                    disabled={isStreaming}
+                    onClick={() => chooseClaudeMode('chat')}
+                    className={`jarvis-pill flex-1 justify-center ${claudeMode === 'chat' ? 'border-cyan-400/60 text-cyan-200' : 'text-zinc-400'}`}
+                    title="Conversa leve, sem ferramentas (~400 tokens por mensagem)"
+                  >
+                    CONVERSA
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={claudeMode === 'agent'}
+                    disabled={isStreaming || !hasAgentMode}
+                    onClick={() => chooseClaudeMode('agent')}
+                    className={`jarvis-pill flex-1 justify-center ${claudeMode === 'agent' ? 'border-purple-400/60 text-purple-200' : 'text-zinc-400'}`}
+                    title={hasAgentMode ? 'Claude Code completo, com ferramentas (~22 mil tokens por mensagem)' : 'Indisponível neste servidor'}
+                  >
+                    AGENTE
+                  </button>
+                </div>
+                <span className="jarvis-field-hint">
+                  {claudeMode === 'agent'
+                    ? 'Agente: usa as ferramentas do Claude Code (ler arquivos, buscar). Gasta bem mais do limite — cerca de 22 mil tokens por mensagem.'
+                    : 'Conversa: leve e rápida, sem ferramentas — cerca de 400 tokens por mensagem.'}
+                </span>
+              </>
+            )}
+          </section>
+
+          <section className="jarvis-drawer-section">
             <h4>Modelo</h4>
             <label className="jarvis-field">
               Modelo de linguagem
               <select
                 className="jarvis-field-input"
                 value={selectedModel}
-                disabled={isStreaming || modelsLoading || models.length === 0}
+                disabled={isStreaming || modelsLoading || models.length === 0 || source === 'claude-code'}
                 onChange={(e) => {
                   setSelectedModel(e.target.value);
                   updateSettings({ defaultModel: e.target.value });
                 }}
               >
                 {!selectedModel && <option value="">— selecione —</option>}
-                {models.map((m) => (
+                {(source === 'claude-code' ? models : localModels(models)).map((m) => (
                   <option key={m.id} value={m.id}>{m.id}</option>
                 ))}
               </select>

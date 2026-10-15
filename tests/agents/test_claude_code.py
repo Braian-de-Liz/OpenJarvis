@@ -261,6 +261,7 @@ class TestClaudeCodeRun:
             session_id="sess-123",
             allowed_tools=["Read", "Write"],
             system_prompt="Be helpful.",
+            mode="agent",
         )
         output = _wrap_output(
             {
@@ -287,7 +288,7 @@ class TestClaudeCodeRun:
         call_kwargs = mock_run.call_args
         stdin_json = json.loads(call_kwargs.kwargs["input"])
         assert stdin_json["prompt"] == "Do something"
-        assert stdin_json["api_key"] == "sk-test"
+        assert "api_key" not in stdin_json
         assert stdin_json["workspace"] == "/projects/myapp"
         assert stdin_json["session_id"] == "sess-123"
         assert stdin_json["allowed_tools"] == ["Read", "Write"]
@@ -404,7 +405,7 @@ class TestClaudeCodeEvents:
                 "_ensure_runner",
                 return_value="/fake/runner",
             ),
-            patch("subprocess.run", return_value=proc),
+            patch.object(agent, "_run_streaming", return_value=proc),
         ):
             agent.run("Hello")
 
@@ -437,7 +438,7 @@ class TestClaudeCodeEvents:
                 "_ensure_runner",
                 return_value="/fake/runner",
             ),
-            patch("subprocess.run", return_value=proc),
+            patch.object(agent, "_run_streaming", return_value=proc),
         ):
             agent.run("test input")
 
@@ -466,7 +467,7 @@ class TestClaudeCodeEvents:
                 "_ensure_runner",
                 return_value="/fake/runner",
             ),
-            patch("subprocess.run", return_value=proc),
+            patch.object(agent, "_run_streaming", return_value=proc),
         ):
             agent.run("Fail")
 
@@ -556,23 +557,12 @@ class TestParseOutput:
 
 
 class TestClaudeCodeDefaults:
-    def test_default_api_key_from_env(self, monkeypatch):
+    def test_api_key_is_never_stored_or_sent(self, monkeypatch):
         monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key-123")
         engine = MagicMock()
         engine.engine_id = "mock"
-        agent = ClaudeCodeAgent(engine, "test-model")
-        assert agent._api_key == "env-key-123"
-
-    def test_explicit_api_key_overrides_env(self, monkeypatch):
-        monkeypatch.setenv("ANTHROPIC_API_KEY", "env-key")
-        engine = MagicMock()
-        engine.engine_id = "mock"
-        agent = ClaudeCodeAgent(
-            engine,
-            "test-model",
-            api_key="explicit-key",
-        )
-        assert agent._api_key == "explicit-key"
+        agent = ClaudeCodeAgent(engine, "test-model", api_key="explicit-key")
+        assert not hasattr(agent, "_api_key")
 
     def test_default_timeout(self):
         engine = MagicMock()
@@ -618,3 +608,170 @@ class TestClaudeCodeDefaults:
             result = agent.run("Hello")
 
         assert result.content == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Live streaming + subscription-only guarantees
+# ---------------------------------------------------------------------------
+
+_FAKE_RUNNER = """
+import json, sys, time
+req = json.loads(sys.stdin.read())
+P = "---OJ_EVENT--- "
+print(P + json.dumps({"type": "text_delta", "text": "Ol"}), flush=True)
+print(P + json.dumps({"type": "tool_start", "id": "t1", "tool": "Read",
+                      "input": {"file": "a"}}), flush=True)
+print(P + json.dumps({"type": "tool_end", "id": "t1", "success": True,
+                      "content": "ok"}), flush=True)
+print(P + json.dumps({"type": "text_delta", "text": "a"}), flush=True)
+print("---OPENJARVIS_OUTPUT_START---")
+print(json.dumps({"content": "Ola", "tool_results": [], "metadata": {}}))
+print("---OPENJARVIS_OUTPUT_END---")
+"""
+
+
+def _streaming_agent(tmp_path, script, bus, **kwargs):
+    import sys
+
+    (tmp_path / "index.mjs").write_text(script, encoding="utf-8")
+    engine = MagicMock()
+    engine.engine_id = "mock"
+    agent = ClaudeCodeAgent(engine, "m", bus=bus, workspace=str(tmp_path), **kwargs)
+    agent._node_executable = sys.executable
+    return agent
+
+
+class TestClaudeCodeStreaming:
+    def test_publishes_live_events(self, tmp_path):
+        bus = EventBus(record_history=True)
+        agent = _streaming_agent(tmp_path, _FAKE_RUNNER, bus)
+        with patch.object(agent, "_ensure_runner", return_value=tmp_path):
+            result = agent.run("hi")
+
+        assert result.content == "Ola"
+        by_type = [(e.event_type, e.data) for e in bus.history]
+        deltas = [d["text"] for t, d in by_type if t == EventType.AGENT_TEXT_DELTA]
+        assert deltas == ["Ol", "a"]
+        starts = [
+            d for t, d in by_type
+            if t == EventType.TOOL_CALL_START and d["tool"] == "Read"
+        ]
+        ends = [
+            d for t, d in by_type
+            if t == EventType.TOOL_CALL_END and d["tool"] == "Read"
+        ]
+        assert starts[0]["arguments"] == {"file": "a"}
+        assert ends[0]["success"] is True
+
+    def test_streaming_timeout_kills_runner(self, tmp_path):
+        bus = EventBus()
+        agent = _streaming_agent(
+            tmp_path, "import time\ntime.sleep(30)\n", bus, timeout=1
+        )
+        with patch.object(agent, "_ensure_runner", return_value=tmp_path):
+            result = agent.run("hi")
+        assert result.metadata["error_type"] == "timeout"
+
+    def test_streaming_runner_failure(self, tmp_path):
+        bus = EventBus()
+        agent = _streaming_agent(
+            tmp_path, "import sys\nsys.stderr.write('boom')\nsys.exit(3)\n", bus
+        )
+        with patch.object(agent, "_ensure_runner", return_value=tmp_path):
+            result = agent.run("hi")
+        assert result.metadata["error"] is True
+        assert "boom" in result.content
+
+
+class TestSubscriptionOnly:
+    """The agent must never authenticate with an API key."""
+
+    def test_runner_strips_api_key_env(self):
+        from pathlib import Path
+
+        import openjarvis.agents.claude_code as mod
+
+        source = (Path(mod.__file__).parent / "claude_code_runner" / "index.mjs")
+        text = source.read_text(encoding="utf-8")
+        # The request's api_key must never be copied into the environment.
+        assert "request.api_key" not in text.replace("request.api_key is", "")
+        assert "process.env.ANTHROPIC_API_KEY =" not in text
+        # Env is scrubbed of every credential source, project settings are not
+        # loaded, and the run aborts unless the SDK reports the login.
+        assert 'key.startsWith("ANTHROPIC_")' in text
+        assert 'key.startsWith("CLAUDE_CODE_USE_")' in text
+        assert 'settingSources: ["user"]' in text
+        assert "apiKeySource" in text
+
+
+class TestServeRefusesApiKey:
+    @pytest.mark.parametrize("var", ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"])
+    def test_serve_claude_code_refuses_with_anthropic_credential(
+        self, monkeypatch, var
+    ):
+        from click.testing import CliRunner
+
+        from openjarvis.cli.serve import serve
+
+        monkeypatch.setenv(var, "sk-ant-test")
+        result = CliRunner().invoke(serve, ["--agent", "claude_code", "--port", "8999"])
+        assert result.exit_code == 1
+        assert "Refusing to start" in result.output
+
+
+class TestChatMode:
+    def _agent(self, **kwargs):
+        engine = MagicMock()
+        engine.engine_id = "mock"
+        return ClaudeCodeAgent(engine, "m", workspace="/tmp/x", **kwargs)
+
+    def _request_for(self, agent, text, context=None):
+        proc = _mock_proc(stdout=_wrap_output({"content": "ok", "tool_results": []}))
+        with (
+            patch.object(agent, "_ensure_runner", return_value="/fake"),
+            patch("subprocess.run", return_value=proc) as run,
+        ):
+            agent.run(text, context=context)
+        return json.loads(run.call_args.kwargs["input"])
+
+    def test_chat_is_the_default_and_drops_tools(self):
+        agent = self._agent(allowed_tools=["Read", "Bash"])
+        req = self._request_for(agent, "oi")
+        assert req["mode"] == "chat"
+        assert req["allowed_tools"] == []
+        assert "JARVIS" in req["system_prompt"]
+
+    def test_agent_mode_keeps_tools_and_prompt(self):
+        agent = self._agent(mode="agent", allowed_tools=["Read"], system_prompt="X")
+        req = self._request_for(agent, "oi")
+        assert req["mode"] == "agent"
+        assert req["allowed_tools"] == ["Read"]
+        assert req["system_prompt"] == "X"
+        assert req["prompt"] == "oi"
+
+    def test_env_can_select_agent_mode(self, monkeypatch):
+        monkeypatch.setenv("OPENJARVIS_CLAUDE_CODE_MODE", "agent")
+        assert self._agent()._mode == "agent"
+
+    def test_chat_prefixes_recent_history(self):
+        from openjarvis.agents._stubs import AgentContext
+        from openjarvis.core.types import Message, Role
+
+        ctx = AgentContext()
+        ctx.conversation.add(Message(role=Role.USER, content="meu nome é Braian"))
+        ctx.conversation.add(Message(role=Role.ASSISTANT, content="Prazer, Braian."))
+        req = self._request_for(self._agent(), "qual meu nome?", ctx)
+        assert "Usuário: meu nome é Braian" in req["prompt"]
+        assert "JARVIS: Prazer, Braian." in req["prompt"]
+        assert req["prompt"].endswith("Usuário: qual meu nome?")
+
+    def test_runner_chat_mode_is_lean(self):
+        from pathlib import Path
+
+        import openjarvis.agents.claude_code as mod
+
+        runner = Path(mod.__file__).parent / "claude_code_runner" / "index.mjs"
+        text = runner.read_text(encoding="utf-8")
+        assert 'request.mode === "chat"' in text
+        assert "options.tools = []" in text
+        assert "options.settingSources = []" in text

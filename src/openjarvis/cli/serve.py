@@ -165,6 +165,26 @@ def serve(
 
     config = load_config()
 
+    # claude_code must run on the Claude Code plan only. Refuse to start when an
+    # Anthropic API credential is present (environment, shell profile or the
+    # OpenJarvis credential store), so nothing can ever be billed per token.
+    if (agent_name or config.server.agent) == "claude_code":
+        _present = [
+            var
+            for var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+            if os.environ.get(var)
+        ]
+        if _present:
+            console.print(
+                "[red bold]Refusing to start:[/red bold] "
+                f"{', '.join(_present)} is set.\n"
+                "The claude_code agent only uses your Claude Code plan login, "
+                "and an Anthropic API key could be billed per token.\n"
+                "Remove it (e.g. [cyan]Remove-Item Env:ANTHROPIC_API_KEY[/cyan] "
+                "or delete it from the OpenJarvis credentials) and run again."
+            )
+            sys.exit(1)
+
     # Resolve host/port from CLI args or config
     bind_host = host or config.server.host
     bind_port = port if port is not None else config.server.port
@@ -209,6 +229,14 @@ def serve(
 
     sec = setup_security(config, engine, bus)
     engine = sec.engine
+
+    # The claude_code agent must only ever use the Claude Code login (plan
+    # limit). Remove Anthropic credentials from this process so no code path
+    # (CloudEngine, cloud router, SDK subprocesses) can bill an API key.
+    if (agent_name or config.server.agent) == "claude_code":
+        for _var in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
+            os.environ.pop(_var, None)
+        os.environ["OPENJARVIS_NO_ANTHROPIC_API"] = "1"
 
     # If cloud API keys are set, prepare a cloud engine. We build the
     # MultiEngine after local discovery so healthy local fallbacks such as
