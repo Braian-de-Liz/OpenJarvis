@@ -879,7 +879,7 @@ export function JARVISMode() {
                   : selectedModel}
             </span>
           </button>
-          {ctxSnapshot.used > 0 && (
+          {(ctxSnapshot.used > 0 || ctxSnapshot.window !== null) && (
             <button
               type="button"
               onClick={openContextTab}
