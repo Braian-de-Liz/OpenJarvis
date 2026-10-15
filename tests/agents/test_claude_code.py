@@ -653,11 +653,13 @@ class TestClaudeCodeStreaming:
         deltas = [d["text"] for t, d in by_type if t == EventType.AGENT_TEXT_DELTA]
         assert deltas == ["Ol", "a"]
         starts = [
-            d for t, d in by_type
+            d
+            for t, d in by_type
             if t == EventType.TOOL_CALL_START and d["tool"] == "Read"
         ]
         ends = [
-            d for t, d in by_type
+            d
+            for t, d in by_type
             if t == EventType.TOOL_CALL_END and d["tool"] == "Read"
         ]
         assert starts[0]["arguments"] == {"file": "a"}
@@ -691,7 +693,7 @@ class TestSubscriptionOnly:
 
         import openjarvis.agents.claude_code as mod
 
-        source = (Path(mod.__file__).parent / "claude_code_runner" / "index.mjs")
+        source = Path(mod.__file__).parent / "claude_code_runner" / "index.mjs"
         text = source.read_text(encoding="utf-8")
         # The request's api_key must never be copied into the environment.
         assert "request.api_key" not in text.replace("request.api_key is", "")
@@ -773,8 +775,8 @@ class TestChatMode:
         runner = Path(mod.__file__).parent / "claude_code_runner" / "index.mjs"
         text = runner.read_text(encoding="utf-8")
         assert 'request.mode === "chat"' in text
-        assert "options.tools = []" in text
         assert "options.settingSources = []" in text
+        assert "return { ...base, tools: [] }" in text
 
 
 class TestClaudeModelChoice:
@@ -891,3 +893,80 @@ class TestRunnerSessionIsolation:
             "USERPROFILE": "C:/u",
         }
         assert self._scrub(keep) == keep
+
+
+class TestAgentToolPolicy:
+    """Agent mode is read-only unless the user opts in explicitly."""
+
+    def _options(self, request):
+        import shutil
+        import subprocess as sp
+
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node not available")
+        src = _RUNNER_SRC.joinpath("index.mjs").read_text(encoding="utf-8")
+        start = src.index("const READ_ONLY_TOOLS")
+        end = src.index("async function main()")
+        program = (
+            src[start:end]
+            + "console.log(JSON.stringify(toolOptions("
+            + json.dumps(request)
+            + ")))"
+        )
+        out = sp.run([node, "-e", program], capture_output=True, text=True, check=True)
+        return json.loads(out.stdout)
+
+    def test_default_agent_can_read_but_not_write_or_run(self):
+        opts = self._options({"mode": "agent", "allowed_tools": []})
+        assert opts["permissionMode"] == "dontAsk"
+        assert set(opts["tools"]) == {"Read", "Glob", "Grep", "WebSearch", "WebFetch"}
+        assert opts["allowedTools"] == opts["tools"]
+        for dangerous in ("Bash", "Edit", "Write", "NotebookEdit", "Task"):
+            assert dangerous not in opts["tools"]
+            assert dangerous in opts["disallowedTools"]
+
+    def test_explicit_allowed_tools_limit_the_set_not_just_preapprove_it(self):
+        opts = self._options({"mode": "agent", "allowed_tools": ["Read", "Edit"]})
+        assert opts["tools"] == ["Read", "Edit"]
+        assert opts["allowedTools"] == ["Read", "Edit"]
+        assert opts["permissionMode"] == "dontAsk"
+        assert "disallowedTools" not in opts
+
+    def test_chat_mode_has_no_tools_and_never_asks(self):
+        opts = self._options({"mode": "chat", "allowed_tools": ["Bash"]})
+        assert opts == {"permissionMode": "dontAsk", "tools": []}
+
+    def test_env_var_is_the_explicit_opt_in(self, monkeypatch):
+        from openjarvis.agents.claude_code import AGENT_TOOLS_ENV, agent_tools_from_env
+
+        monkeypatch.delenv(AGENT_TOOLS_ENV, raising=False)
+        assert agent_tools_from_env() == []
+        monkeypatch.setenv(AGENT_TOOLS_ENV, " Read, Grep ,,Edit ")
+        assert agent_tools_from_env() == ["Read", "Grep", "Edit"]
+
+    def _sent_tools(self, monkeypatch, **kwargs):
+        engine = MagicMock()
+        engine.engine_id = "mock"
+        agent = ClaudeCodeAgent(engine, "m", mode="agent", **kwargs)
+        proc = _mock_proc(stdout=_wrap_output({"content": "ok", "tool_results": []}))
+        with (
+            patch.object(agent, "_ensure_runner", return_value="/fake"),
+            patch("subprocess.run", return_value=proc) as run,
+        ):
+            agent.run("oi")
+        return json.loads(run.call_args.kwargs["input"])["allowed_tools"]
+
+    def test_agent_sends_no_tools_by_default_so_the_runner_stays_read_only(
+        self, monkeypatch
+    ):
+        monkeypatch.delenv("OPENJARVIS_CLAUDE_AGENT_TOOLS", raising=False)
+        assert self._sent_tools(monkeypatch) == []
+
+    def test_env_opt_in_reaches_the_runner(self, monkeypatch):
+        monkeypatch.setenv("OPENJARVIS_CLAUDE_AGENT_TOOLS", "Read,Edit")
+        assert self._sent_tools(monkeypatch) == ["Read", "Edit"]
+
+    def test_constructor_tools_win_over_the_env(self, monkeypatch):
+        monkeypatch.setenv("OPENJARVIS_CLAUDE_AGENT_TOOLS", "Bash")
+        assert self._sent_tools(monkeypatch, allowed_tools=["Read"]) == ["Read"]

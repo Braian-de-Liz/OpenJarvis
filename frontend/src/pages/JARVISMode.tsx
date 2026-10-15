@@ -1333,14 +1333,14 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
                     disabled={isStreaming || !hasAgentMode}
                     onClick={() => chooseClaudeMode('agent')}
                     className={`jarvis-pill flex-1 justify-center ${claudeMode === 'agent' ? 'border-purple-400/60 text-purple-200' : 'text-zinc-400'}`}
-                    title={hasAgentMode ? 'Claude Code completo, com ferramentas (~22 mil tokens por mensagem)' : 'Indisponível neste servidor'}
+                    title={hasAgentMode ? 'Claude Code com ferramentas de leitura: lê arquivos, busca e pesquisa na web, sem editar nem rodar comandos (~22 mil tokens por mensagem)' : 'Indisponível neste servidor'}
                   >
                     AGENTE
                   </button>
                 </div>
                 <span className="jarvis-field-hint">
                   {claudeMode === 'agent'
-                    ? 'Agente: usa as ferramentas do Claude Code (ler arquivos, buscar). Gasta bem mais do limite — cerca de 22 mil tokens por mensagem.'
+                    ? 'Agente (somente leitura): lê arquivos, busca no projeto e na web, mas não edita nem roda comandos. Gasta bem mais do limite — cerca de 22 mil tokens por mensagem.'
                     : 'Conversa: leve e rápida, sem ferramentas — cerca de 400 tokens por mensagem.'}
                 </span>
                 <label className="jarvis-field mt-3">

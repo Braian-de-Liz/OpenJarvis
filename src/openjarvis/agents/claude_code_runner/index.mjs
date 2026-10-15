@@ -79,6 +79,40 @@ function serializeContent(content) {
   return typeof content === "string" ? content : JSON.stringify(content ?? "");
 }
 
+// Tool policy. `allowedTools` in the SDK only PRE-APPROVES tools; it does not
+// limit which ones exist. Availability is set with `tools` / `disallowedTools`.
+// The default agent is read-only: it can read, search and browse, but cannot
+// run commands or change files, whatever the user's own Claude Code settings
+// (allow rules, defaultMode) say. Writing/shell needs an explicit opt-in
+// (`allowed_tools`, e.g. via OPENJARVIS_CLAUDE_AGENT_TOOLS).
+const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
+const BLOCKED_TOOLS = [
+  "Bash",
+  "BashOutput",
+  "KillShell",
+  "Edit",
+  "Write",
+  "NotebookEdit",
+  "Task",
+];
+
+function toolOptions(request) {
+  // "dontAsk": whatever is not pre-approved is denied instead of prompting
+  // (there is nobody to answer a prompt in this headless runner).
+  const base = { permissionMode: "dontAsk" };
+  if (request.mode === "chat") return { ...base, tools: [] };
+  const explicit = (request.allowed_tools || []).filter(Boolean);
+  if (explicit.length) {
+    return { ...base, tools: explicit, allowedTools: explicit };
+  }
+  return {
+    ...base,
+    tools: READ_ONLY_TOOLS,
+    allowedTools: READ_ONLY_TOOLS,
+    disallowedTools: BLOCKED_TOOLS,
+  };
+}
+
 async function main() {
   let request;
   try {
@@ -111,9 +145,7 @@ async function main() {
   if (request.system_prompt) {
     options.systemPrompt = request.system_prompt;
   }
-  if (request.allowed_tools?.length) {
-    options.allowedTools = request.allowed_tools;
-  }
+  Object.assign(options, toolOptions(request));
   if (request.session_id) {
     options.sessionId = request.session_id;
   }
@@ -124,10 +156,8 @@ async function main() {
   if (request.mode === "chat") {
     // Conversation mode: no tools, no user settings and a short system prompt.
     // This cuts the fixed per-message context from ~22k tokens to a few hundred.
-    options.tools = [];
     options.settingSources = [];
     options.maxTurns = 2;
-    delete options.allowedTools;
     if (!options.systemPrompt) {
       options.systemPrompt = "Responda de forma curta e direta.";
     }

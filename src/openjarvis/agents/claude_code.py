@@ -61,6 +61,20 @@ if not _RUNNER_SRC.exists():
 _CLAUDE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\-\[\]]{0,63}$")
 
 
+AGENT_TOOLS_ENV = "OPENJARVIS_CLAUDE_AGENT_TOOLS"
+
+
+def agent_tools_from_env() -> List[str]:
+    """Explicit opt-in tool list for agent mode, e.g. ``Read,Grep,Edit``.
+
+    Empty (the default) means the runner's read-only set. Naming a tool here
+    both makes it available and pre-approves it, so writing or running commands
+    is always a deliberate choice made outside the HUD.
+    """
+    raw = os.environ.get(AGENT_TOOLS_ENV, "")
+    return [name for name in (part.strip() for part in raw.split(",")) if name]
+
+
 def claude_model_from(model: str) -> str:
     """Return the Claude model suffix of a ``claude-code[:model]`` id, or ''."""
     _, sep, suffix = (model or "").partition(":")
@@ -233,7 +247,9 @@ class ClaudeCodeAgent(BaseAgent):
         request = {
             "prompt": self._with_history(input, context) if chat else input,
             "workspace": self._workspace,
-            "allowed_tools": [] if chat else (self._allowed_tools or []),
+            "allowed_tools": (
+                [] if chat else (self._allowed_tools or agent_tools_from_env() or [])
+            ),
             "system_prompt": self._system_prompt
             or (_CHAT_SYSTEM_PROMPT if chat else ""),
             "session_id": self._session_id,
