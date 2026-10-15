@@ -13,7 +13,7 @@
     "build": "tsc -b && vite build",
     "build:tauri": "tsc -b && vite build --outDir dist",
     "preview": "vite preview",
-    "tauri": "tauri",
+    "tauri": "tauri build",
     "test": "vitest run"
   },
   "dependencies": {

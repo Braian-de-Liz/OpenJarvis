@@ -1357,6 +1357,14 @@ def include_all_routes(app) -> None:
     except Exception:
         logger.debug("Voice events relay not available", exc_info=True)
 
+    # HUD "o que tem na minha tela?": capture + Windows OCR.
+    try:
+        from openjarvis.server.vision import create_vision_router
+
+        app.include_router(create_vision_router())
+    except Exception:
+        logger.debug("Screen reading not available", exc_info=True)
+
     # HUD reminders: own scheduler + store, announced through the voice relay.
     try:
         from openjarvis.server.reminders import create_reminders_router
