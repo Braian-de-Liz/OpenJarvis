@@ -25,7 +25,9 @@ import {
   ChevronUp, ChevronDown, Settings, Sparkles, Camera, Thermometer, Send, Square,
   MessageSquare, Server, SlidersHorizontal, RotateCcw, Loader2, ShieldAlert,
   Plus, Eraser, HelpCircle, LayoutGrid, Brain, AlarmClock, Sunrise, Bot,
+  ScanText,
 } from 'lucide-react';
+import { buildScreenPrompt, readScreen } from '../lib/screenRead';
 import { HudModules } from '../components/Jarvis/HudModules';
 import { HudMemory } from '../components/Jarvis/HudMemory';
 import { HudReminders } from '../components/Jarvis/HudReminders';
@@ -48,6 +50,8 @@ import type { VoiceLogEntry } from '../lib/useVoiceEvents';
 
 // Shared colour language: cyan = idle/listening, purple = speaking/processing.
 const HUE_IDLE = 188;
+// "Ler tela" countdown, so the window to read can be brought to the front.
+const SCREEN_READ_DELAY_MS = 3000;
 const HUE_LISTEN = 192;
 const HUE_SPEAK = 272;
 
@@ -742,6 +746,33 @@ export function JARVISMode() {
     }
   }, [browserRecording, keyState]);
 
+  // "Ler tela": the HUD itself is usually what's on screen when the button is
+  // clicked, so count down first to let the user switch to the window to read.
+  const [readingScreen, setReadingScreen] = useState(false);
+  const handleReadScreen = async (question?: string) => {
+    if (readingScreen || useAppStore.getState().streamState.isStreaming) return;
+    setReadingScreen(true);
+    let prompt = '';
+    try {
+      const toastId = toast.loading('Lendo a tela em 3 s — troque para a janela desejada…');
+      await new Promise((r) => setTimeout(r, SCREEN_READ_DELAY_MS));
+      const screen = await readScreen();
+      toast.dismiss(toastId);
+      if (!screen.text) {
+        toast.info('Não encontrei texto na tela.');
+        return;
+      }
+      prompt = buildScreenPrompt(screen, question);
+    } catch (err) {
+      toast.dismiss();
+      toast.error(`Ler tela: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    } finally {
+      setReadingScreen(false);
+    }
+    await handleSendMessage(prompt);
+  };
+
   const handleSpeakTest = () => {
     if (tts.isSpeaking || tts.isLoading) {
       tts.stop();
@@ -965,6 +996,15 @@ export function JARVISMode() {
               {browserTranscribing ? <Loader2 size={14} className="animate-spin" /> : browserRecording ? <Send size={14} /> : <Mic size={14} />}
               {browserTranscribing ? 'Transcrevendo…' : browserRecording ? 'Enviar fala' : 'Falar'}
             </button>
+            <button
+              onClick={() => void handleReadScreen()}
+              disabled={readingScreen || chatStreaming}
+              className="jarvis-voice-btn disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Em 3 s lê o texto de todas as telas (troque para a janela que quer ler) e pede um resumo ao JARVIS"
+            >
+              {readingScreen ? <Loader2 size={14} className="animate-spin" /> : <ScanText size={14} />}
+              {readingScreen ? 'Lendo tela…' : 'Ler tela'}
+            </button>
             {chatStreaming || tts.isSpeaking || tts.isLoading ? (
               <button onClick={handleStop} className="jarvis-voice-btn is-on-purple">
                 <Square size={13} />
@@ -1050,7 +1090,11 @@ export function JARVISMode() {
             />
           </HUDPanel>
           <HUDPanel title="Ações Rápidas" icon={<Sparkles size={14} />} code="ACT·04" collapsible>
-            <QuickActions onAction={handleSendMessage} disabled={chatStreaming} />
+            <QuickActions
+              onAction={handleSendMessage}
+              onReadScreen={() => void handleReadScreen()}
+              disabled={chatStreaming || readingScreen}
+            />
           </HUDPanel>
         </div>
       </main>
@@ -1411,11 +1455,16 @@ function SystemControlRow({ label, value, icon: Icon, status }: {
   );
 }
 
-function QuickActions({ onAction, disabled }: { onAction: (text: string) => void; disabled: boolean }) {
-  const actions = [
+function QuickActions({ onAction, onReadScreen, disabled }: {
+  onAction: (text: string) => void;
+  onReadScreen: () => void;
+  disabled: boolean;
+}) {
+  const actions: { label: string; cmd: string; icon: typeof Volume2; run?: () => void }[] = [
     { label: 'Volume 80%', cmd: 'Aumente o volume para 80%', icon: Volume2 },
     { label: 'Fechar Chrome', cmd: 'Feche o Google Chrome', icon: X },
-    { label: 'Print Screen', cmd: 'Tire um print da tela e leia o texto', icon: Camera },
+    // Real screen reading (OCR) instead of asking the model to take a print.
+    { label: 'Ler tela', cmd: 'Ler o texto da tela e resumir', icon: Camera, run: onReadScreen },
     { label: 'Processos CPU', cmd: 'Liste processos com alto uso de CPU', icon: Cpu },
     { label: 'Mutar Mic', cmd: 'Mute o microfone', icon: MicOff },
     { label: 'Headset', cmd: 'Mude o áudio para o headset', icon: Headphones },
@@ -1426,7 +1475,7 @@ function QuickActions({ onAction, disabled }: { onAction: (text: string) => void
       {actions.map((a) => (
         <button
           key={a.label}
-          onClick={() => onAction(a.cmd)}
+          onClick={() => (a.run ? a.run() : onAction(a.cmd))}
           disabled={disabled}
           className="jarvis-quick-btn group disabled:opacity-40 disabled:cursor-not-allowed"
           title={a.cmd}

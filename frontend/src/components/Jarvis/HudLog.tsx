@@ -86,6 +86,26 @@ export function TelemetryLine({ message }: { message: ChatMessage }) {
   return <div className="text-[9px] tracking-wider text-zinc-600 mt-1">{parts.join(' · ')}</div>;
 }
 
+export const USER_TEXT_FOLD = 400;
+
+/** User text; long messages (e.g. a screen reading) fold after the first line. */
+export function UserText({ text }: { text: string }) {
+  const cls = 'whitespace-pre-wrap break-words text-amber-100/90';
+  if (text.length <= USER_TEXT_FOLD) return <p className={cls}>{text}</p>;
+  const firstLine = text.split('\n', 1)[0].slice(0, USER_TEXT_FOLD);
+  return (
+    <div>
+      <p className={cls}>{firstLine}</p>
+      <details className="mt-1">
+        <summary className="cursor-pointer text-[10px] text-zinc-500 hover:text-zinc-300">
+          ver texto completo ({text.length.toLocaleString('pt-BR')} caracteres)
+        </summary>
+        <p className={`${cls} mt-1 max-h-48 overflow-y-auto text-[11px] text-amber-100/70`}>{text}</p>
+      </details>
+    </div>
+  );
+}
+
 /** Merge typed chat (store) and hands-free voice turns in time order. */
 export function buildEntries(
   messages: ChatMessage[],
@@ -177,7 +197,7 @@ export function HudLog({ messages, voiceLog, stream, activeId, userName, emptyHi
                 </div>
               )}
               {e.role === 'user' ? (
-                <p className="whitespace-pre-wrap break-words text-amber-100/90">{e.text}</p>
+                <UserText text={e.text} />
               ) : e.text ? (
                 <div className="text-cyan-100/90">
                   <HudMarkdown text={e.text} />
