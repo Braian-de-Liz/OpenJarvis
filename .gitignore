@@ -136,3 +136,7 @@ oj-debug.*.json
 /*.wav
 /server.err
 /show_test_*.txt
+
+# Bun is only a local fallback runner; npm (package-lock.json) is the source of truth.
+frontend/bun.lock
+frontend/bun.lockb
