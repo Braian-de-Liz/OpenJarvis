@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from collections.abc import AsyncIterator
 from typing import Any, Sequence
 
@@ -94,7 +95,7 @@ def is_cloud_model(model: str) -> bool:
     """Return True if the model is served by a cloud provider."""
     # "claude-code" is the Claude Code agent (login auth), never the paid API.
     # "claude-code:opus" (model picked in the HUD) is still the agent.
-    if model.partition(":")[0] in ("claude-code", "claude-code-agent"):
+    if re.split("[:@]", model, maxsplit=1)[0] in ("claude-code", "claude-code-agent"):
         return False
     return get_provider(model) is not None
 

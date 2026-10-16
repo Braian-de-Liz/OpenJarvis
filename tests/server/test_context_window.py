@@ -128,3 +128,26 @@ def test_permission_gates_are_not_reported_as_tools():
     assert not is_internal_operation("Read")
     assert not is_internal_operation("shell_exec")
     assert not is_internal_operation(None)
+
+
+# --- ids with a permission suffix ("claude-code-agent:haiku@ask") ------------
+
+
+def test_permission_suffixed_ids_are_the_agent_not_the_paid_api():
+    from openjarvis.server.cloud_router import is_cloud_model
+
+    for model in (
+        "claude-code-agent@ask",
+        "claude-code-agent:haiku@free",
+        "claude-code@x",
+    ):
+        assert not is_cloud_model(model)
+
+
+def test_context_window_understands_permission_suffixes():
+    agent = describe_window(
+        "claude-code-agent:opus@ask", show=lambda m: 1, num_ctx=lambda: 1
+    )
+    assert agent["source"] == "claude" and agent["history_limit"] is None
+    chat = describe_window("claude-code:haiku", show=lambda m: 1, num_ctx=lambda: 1)
+    assert chat["history_limit"] == {"messages": 12, "chars": 6000}

@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -224,7 +225,7 @@ async def chat_completions(request_body: ChatCompletionRequest, request: Request
     # whatever agent the server was started with.
     # "claude-code:opus" picks the Claude model; the suffix reaches the agent
     # through ``agent._model`` (see ClaudeCodeAgent / claude_model_from).
-    claude_base = model.partition(":")[0]
+    claude_base = re.split("[:@]", model, maxsplit=1)[0]
     if claude_base in _CLAUDE_CODE_MODES:
         agent = _claude_code_agent(request, claude_base)
     # claude_code runs on the Claude Code login only. Always route it through

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Dict, Optional
 
 from fastapi import APIRouter, Query
@@ -55,7 +56,7 @@ def describe_window(
     show: Callable[[str], Optional[int]] = _ollama_context_length,
     num_ctx: Callable[[], int] = _num_ctx,
 ) -> Dict[str, Any]:
-    base = model.partition(":")[0]
+    base = re.split("[:@]", model, maxsplit=1)[0]
     if base in _CLAUDE_IDS:
         from openjarvis.agents.claude_code import (
             _HISTORY_MAX_CHARS,

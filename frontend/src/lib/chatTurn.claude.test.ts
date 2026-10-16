@@ -61,11 +61,31 @@ describe('Claude model choice', () => {
     expect(sent[0].model).toBe('claude-code:opus');
   });
 
-  it('keeps the plan default when no Claude model is chosen', async () => {
+  it('keeps the plan default model, and the agent asks before acting by default', async () => {
     const { sendChatTurn } = await setup('claude-code-agent');
     events = [chunk('oi', 'stop')];
     await sendChatTurn('oi');
-    expect(sent[0].model).toBe('claude-code-agent');
+    expect(sent[0].model).toBe('claude-code-agent@ask');
+  });
+
+  it('sends the chosen agent permission mode', async () => {
+    const { sendChatTurn, useHudSettings } = await setup('claude-code-agent', 'haiku');
+    events = [chunk('oi', 'stop')];
+    for (const mode of ['read', 'free'] as const) {
+      useHudSettings.getState().updateHud({ claudeAgentMode: mode });
+      await sendChatTurn('oi');
+    }
+    expect(sent.map((s) => s.model)).toEqual([
+      'claude-code-agent:haiku@read',
+      'claude-code-agent:haiku@free',
+    ]);
+  });
+
+  it('never adds a permission mode to conversation mode or local models', async () => {
+    const { sendChatTurn } = await setup('claude-code');
+    events = [chunk('oi', 'stop')];
+    await sendChatTurn('oi');
+    expect(sent[0].model).toBe('claude-code');
   });
 
   it('never suffixes local models', async () => {
@@ -93,6 +113,8 @@ describe('aiSource helpers', () => {
     expect(requestModel('claude-code', 'haiku')).toBe('claude-code:haiku');
     expect(requestModel('claude-code', '')).toBe('claude-code');
     expect(requestModel('qwen2.5:7b', 'opus')).toBe('qwen2.5:7b');
+    expect(requestModel('claude-code-agent', 'opus', 'free')).toBe('claude-code-agent:opus@free');
+    expect(requestModel('claude-code-agent', '')).toBe('claude-code-agent@ask');
     expect(claudeModelLabel('claude-opus-4-1', 'opus')).toBe('claude-opus-4-1');
     expect(claudeModelLabel('', 'opus')).toBe('Opus');
     expect(claudeModelLabel('', '')).toBe('Padrão do plano');

@@ -61,8 +61,45 @@ export const CLAUDE_MODEL_OPTIONS: { value: string; label: string; hint: string 
 ];
 
 /** Model id sent to the server: "claude-code:opus" when a Claude model is chosen. */
-export function requestModel(model: string, claudeModel: string): string {
-  return isClaudeCode(model) && claudeModel ? `${model}:${claudeModel}` : model;
+export function requestModel(
+  model: string,
+  claudeModel: string,
+  agentMode: AgentPermission = 'ask',
+): string {
+  if (!isClaudeCode(model)) return model;
+  const withModel = claudeModel ? `${model}:${claudeModel}` : model;
+  // The permission mode only applies to the agent ("claude-code-agent@ask").
+  return model === CLAUDE_CODE_AGENT_MODEL ? `${withModel}@${agentMode}` : withModel;
+}
+
+/** What the Claude agent may do. read: only look; ask: every edit/command needs
+ * your approval in the HUD; free: edits and commands inside the project run
+ * without asking (risky or outside-the-project ones still ask). */
+export type AgentPermission = 'read' | 'ask' | 'free';
+
+export const AGENT_PERMISSION_OPTIONS: { value: AgentPermission; label: string; hint: string }[] = [
+  {
+    value: 'read',
+    label: 'LEITURA',
+    hint: 'Só lê arquivos, busca no projeto e na web. Não edita nem roda comandos.',
+  },
+  {
+    value: 'ask',
+    label: 'PERGUNTAR',
+    hint: 'Lê livremente; toda edição de arquivo ou comando pede a sua aprovação aqui no HUD.',
+  },
+  {
+    value: 'free',
+    label: 'LIVRE',
+    hint:
+      'Edita arquivos e roda comandos comuns dentro da pasta do projeto sem perguntar. '
+      + 'Fora da pasta, ou comandos arriscados (apagar, instalar, git push, internet, shell inline), ainda pedem aprovação. '
+      + 'Não é uma sandbox: confira o que aprova.',
+  },
+];
+
+export function agentPermissionLabel(permission: AgentPermission): string {
+  return AGENT_PERMISSION_OPTIONS.find((o) => o.value === permission)?.label ?? permission.toUpperCase();
 }
 
 /** Short label for the Claude model in use, e.g. "claude-opus-4-1" or "Opus". */

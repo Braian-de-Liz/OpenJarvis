@@ -27,6 +27,12 @@ from openjarvis.core.paths import get_config_dir
 from openjarvis.core.registry import AgentRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.engine._stubs import InferenceEngine
+from openjarvis.tools.approval_store import (
+    STATUS_APPROVED,
+    STATUS_EXPIRED,
+    STATUS_PENDING,
+    ApprovalStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,12 +81,26 @@ def agent_tools_from_env() -> List[str]:
     return [name for name in (part.strip() for part in raw.split(",")) if name]
 
 
+PERMISSIONS = ("read", "ask", "free")
+
+
+def split_claude_id(model: str) -> tuple[str, str, str]:
+    """Split ``base[:claude_model][@permission]`` into its three parts."""
+    rest, _, permission = (model or "").partition("@")
+    base, sep, claude_model = rest.partition(":")
+    return base, (claude_model if sep else ""), permission
+
+
 def claude_model_from(model: str) -> str:
-    """Return the Claude model suffix of a ``claude-code[:model]`` id, or ''."""
-    _, sep, suffix = (model or "").partition(":")
-    if not sep or not _CLAUDE_MODEL_RE.match(suffix):
-        return ""
-    return suffix
+    """Return the Claude model part of a ``claude-code[:model][@perm]`` id, or ''."""
+    suffix = split_claude_id(model)[1]
+    return suffix if _CLAUDE_MODEL_RE.match(suffix) else ""
+
+
+def permission_from(model: str) -> str:
+    """Agent permission mode of a model id: read (default) / ask / free."""
+    permission = split_claude_id(model)[2]
+    return permission if permission in PERMISSIONS else "read"
 
 
 def _kill_process_tree(proc: "subprocess.Popen[str]") -> None:
@@ -95,6 +115,46 @@ def _kill_process_tree(proc: "subprocess.Popen[str]") -> None:
         proc.kill()
     except OSError:
         pass
+
+
+class _Deadline:
+    """A timeout clock that stops while we wait for the user to decide."""
+
+    def __init__(self, seconds: float) -> None:
+        self._end = time.monotonic() + seconds
+        self._paused_at: Optional[float] = None
+        self._lock = threading.Lock()
+
+    def pause(self) -> None:
+        with self._lock:
+            if self._paused_at is None:
+                self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        with self._lock:
+            if self._paused_at is not None:
+                self._end += time.monotonic() - self._paused_at
+                self._paused_at = None
+
+    def expired(self) -> bool:
+        with self._lock:
+            return self._paused_at is None and time.monotonic() > self._end
+
+
+def describe_permission(
+    tool: str, tool_input: dict[str, Any], reason: Any = None
+) -> str:
+    """One readable line for the HUD approval card."""
+    if tool == "Bash":
+        text = f"Rodar comando: {str(tool_input.get('command', ''))[:300]}"
+    elif tool in ("Edit", "NotebookEdit"):
+        target = tool_input.get("file_path") or tool_input.get("notebook_path") or "?"
+        text = f"Editar arquivo: {target}"
+    elif tool == "Write":
+        text = f"Criar ou sobrescrever arquivo: {tool_input.get('file_path', '?')}"
+    else:
+        text = f"Usar a ferramenta {tool}"
+    return f"{text} ({reason})" if reason else text
 
 
 @AgentRegistry.register("claude_code")
@@ -130,6 +190,8 @@ class ClaudeCodeAgent(BaseAgent):
         system_prompt: str = "",
         mode: Optional[str] = None,
         timeout: int = 300,
+        approval_store: Optional[Any] = None,
+        approval_timeout: float = 180.0,
         capability_policy: Optional[Any] = None,
         rate_limiter: Optional[Any] = None,
         agent_id: Optional[str] = None,
@@ -158,6 +220,9 @@ class ClaudeCodeAgent(BaseAgent):
         self._mode = "agent" if chosen == "agent" else "chat"
         self._timeout = timeout
         self._node_executable = "node"
+        # Where "ask" decisions are queued so the HUD can show Aprovar/Negar.
+        self._approval_store = approval_store
+        self._approval_timeout = approval_timeout
 
     # ------------------------------------------------------------------
     # Runner management
@@ -254,6 +319,10 @@ class ClaudeCodeAgent(BaseAgent):
             or (_CHAT_SYSTEM_PROMPT if chat else ""),
             "session_id": self._session_id,
             "mode": self._mode,
+            # read (default) / ask / free; see the runner's tool policy.
+            "permission": permission_from(self._model),
+            # Questions can only be answered over the streaming channel.
+            "interactive": self._bus is not None,
         }
         claude_model = claude_model_from(self._model)
         if claude_model:
@@ -359,7 +428,9 @@ class ClaudeCodeAgent(BaseAgent):
 
         Mirrors ``subprocess.run`` (same timeout semantics and return value)
         but reads stdout line by line so text and tool progress reach the
-        bus while the query is still running.
+        bus while the query is still running. stdin stays open after the
+        request so permission decisions can be written back; time spent
+        waiting for the user does not count against the timeout.
         """
         proc = subprocess.Popen(
             [self._node_executable, "index.mjs"],
@@ -372,13 +443,18 @@ class ClaudeCodeAgent(BaseAgent):
             errors="replace",
         )
         timed_out = threading.Event()
+        finished = threading.Event()
+        deadline = _Deadline(self._timeout)
 
-        def _kill() -> None:
-            timed_out.set()
-            _kill_process_tree(proc)
+        def _watchdog() -> None:
+            while not finished.wait(min(0.1, max(self._timeout / 5, 0.01))):
+                if deadline.expired():
+                    timed_out.set()
+                    _kill_process_tree(proc)
+                    return
 
-        timer = threading.Timer(self._timeout, _kill)
-        timer.start()
+        watchdog = threading.Thread(target=_watchdog, daemon=True)
+        watchdog.start()
         stderr_chunks: list[str] = []
         stderr_thread = threading.Thread(
             target=lambda: stderr_chunks.append(proc.stderr.read()),
@@ -387,26 +463,46 @@ class ClaudeCodeAgent(BaseAgent):
         stderr_thread.start()
         stdout_lines: list[str] = []
         tool_starts: dict[str, tuple[str, float]] = {}
+
+        def _on_permission(event: dict[str, Any]) -> None:
+            deadline.pause()  # the user's thinking time is not the model's
+            try:
+                allowed = self._ask_user(event, proc)
+            finally:
+                deadline.resume()
+            self._send_decision(proc, str(event.get("id", "")), allowed)
+
         try:
             try:
                 assert proc.stdin is not None
-                proc.stdin.write(json.dumps(request))
-                proc.stdin.close()
+                # One line: the request. stdin stays open for decisions.
+                proc.stdin.write(json.dumps(request) + "\n")
+                proc.stdin.flush()
             except OSError:
                 pass  # runner died early; its exit code is reported below
             assert proc.stdout is not None
             for line in proc.stdout:
                 if line.startswith(_EVENT_PREFIX):
-                    self._publish_runner_event(line[len(_EVENT_PREFIX):], tool_starts)
+                    self._publish_runner_event(
+                        line[len(_EVENT_PREFIX) :],
+                        tool_starts,
+                        on_permission=_on_permission,
+                    )
                 else:
                     stdout_lines.append(line)
             proc.wait()
         finally:
-            timer.cancel()
+            finished.set()
+            try:
+                if proc.stdin is not None:
+                    proc.stdin.close()
+            except OSError:
+                pass
             if proc.poll() is None:  # error mid-read: never leave node running
                 _kill_process_tree(proc)
                 proc.wait()
             stderr_thread.join(timeout=2)
+            watchdog.join(timeout=2)
         if timed_out.is_set():
             raise subprocess.TimeoutExpired(
                 cmd="node index.mjs", timeout=self._timeout
@@ -418,8 +514,81 @@ class ClaudeCodeAgent(BaseAgent):
             stderr="".join(stderr_chunks),
         )
 
+    # ------------------------------------------------------------------
+    # Permission questions
+    # ------------------------------------------------------------------
+
+    def _store(self) -> Any:
+        if self._approval_store is None:
+            self._approval_store = ApprovalStore()
+        return self._approval_store
+
+    def _ask_user(self, event: dict[str, Any], proc: Any) -> bool:
+        """Queue the question for the HUD and wait for Aprovar/Negar.
+
+        True only on an explicit approval. Timeout, a dead runner or any error
+        mean "no": the safe answer is always to deny.
+        """
+        tool = str(event.get("tool", ""))
+        tool_input = event.get("input") or {}
+        try:
+            store = self._store()
+            action = store.queue_action(
+                action_type=f"claude_code:{tool}",
+                description=describe_permission(
+                    tool, tool_input, event.get("reason")
+                ),
+                payload={
+                    "tool": tool,
+                    "input": tool_input,
+                    "reason": event.get("reason", ""),
+                    "blocked_path": event.get("blocked_path", ""),
+                },
+                permission_key=f"claude_code:{tool}",
+                tier="high" if tool == "Bash" else "medium",
+                ttl_hours=1,
+            )
+        except Exception:
+            logger.warning("Could not queue the approval request", exc_info=True)
+            return False
+
+        limit = time.monotonic() + self._approval_timeout
+        while time.monotonic() < limit and proc.poll() is None:
+            try:
+                current = store.get_action(action.id)
+            except Exception:
+                logger.warning("Could not read the approval status", exc_info=True)
+                return False
+            if current is None:
+                return False
+            if current.status != STATUS_PENDING:
+                return current.status == STATUS_APPROVED
+            time.sleep(0.25)
+        try:
+            store.update_status(action.id, STATUS_EXPIRED)
+        except Exception:
+            logger.debug("Could not expire the approval request", exc_info=True)
+        return False
+
+    @staticmethod
+    def _send_decision(proc: Any, request_id: str, allowed: bool) -> None:
+        try:
+            assert proc.stdin is not None
+            message = {
+                "type": "permission_decision",
+                "id": request_id,
+                "allow": allowed,
+            }
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+        except (OSError, ValueError):
+            pass  # the runner is gone; it denies on EOF anyway
+
     def _publish_runner_event(
-        self, raw: str, tool_starts: dict[str, tuple[str, float]]
+        self,
+        raw: str,
+        tool_starts: dict[str, tuple[str, float]],
+        on_permission: Optional[Any] = None,
     ) -> None:
         """Translate one runner event line into an EventBus event."""
         try:
@@ -427,7 +596,10 @@ class ClaudeCodeAgent(BaseAgent):
         except json.JSONDecodeError:
             return
         kind = event.get("type")
-        if kind == "model":
+        if kind == "permission_request":
+            if on_permission is not None:
+                on_permission(event)
+        elif kind == "model":
             self._bus.publish(
                 EventType.AGENT_MODEL_INFO,
                 {"agent": self.agent_id, "model": str(event.get("model", ""))},

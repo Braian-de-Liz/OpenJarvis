@@ -34,7 +34,8 @@ export async function sendChatTurn(
   const convId = store.activeId ?? store.createConversation(model);
   const { temperature, maxTokens } = store.settings;
   // Claude Code: the HUD's Claude model choice rides on the model id.
-  const sentModel = requestModel(model, useHudSettings.getState().hud.claudeModel);
+  const hudSettings = useHudSettings.getState().hud;
+  const sentModel = requestModel(model, hudSettings.claudeModel, hudSettings.claudeAgentMode);
 
   const userMsg: ChatMessage = { id: generateId(), role: 'user', content, timestamp: Date.now() };
   store.addMessage(convId, userMsg);

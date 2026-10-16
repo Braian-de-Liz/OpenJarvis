@@ -5,6 +5,8 @@
  * response to stdout.
  */
 
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const OUTPUT_START = "---OPENJARVIS_OUTPUT_START---";
@@ -66,13 +68,119 @@ function emitError(message) {
   console.error(message);
 }
 
-async function readStdin() {
-  let data = "";
+// stdin protocol: the first line is the JSON request; later lines are the
+// host's answers to permission questions ({"type":"permission_decision",
+// "id":..., "allow":true|false}). A request sent without a trailing newline and
+// followed by EOF (the non-interactive path) works too.
+function openStdin() {
   process.stdin.setEncoding("utf-8");
-  for await (const chunk of process.stdin) {
-    data += chunk;
+  let buf = "";
+  let gotRequest = false;
+  let ended = false;
+  let resolveRequest;
+  let rejectRequest;
+  const request = new Promise((resolve, reject) => {
+    resolveRequest = resolve;
+    rejectRequest = reject;
+  });
+  const waiting = new Map();
+
+  const handleLine = (line) => {
+    if (!line.trim()) return;
+    if (!gotRequest) {
+      gotRequest = true;
+      resolveRequest(line);
+      return;
+    }
+    try {
+      const message = JSON.parse(line);
+      if (message.type === "permission_decision" && waiting.has(message.id)) {
+        waiting.get(message.id)(message.allow === true);
+        waiting.delete(message.id);
+      }
+    } catch {
+      // not a decision: ignore
+    }
+  };
+
+  process.stdin.on("data", (chunk) => {
+    buf += chunk;
+    let newline;
+    while ((newline = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, newline);
+      buf = buf.slice(newline + 1);
+      handleLine(line);
+    }
+  });
+  process.stdin.on("end", () => {
+    ended = true;
+    if (buf.trim()) handleLine(buf);
+    buf = "";
+    if (!gotRequest) rejectRequest(new Error("empty stdin"));
+    // The host went away: nobody can approve anything any more.
+    for (const resolve of waiting.values()) resolve(false);
+    waiting.clear();
+  });
+
+  return {
+    request,
+    // Resolves true only on an explicit approval; timeout/EOF mean "no".
+    decision(id, timeoutMs) {
+      if (ended) return Promise.resolve(false);
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          waiting.delete(id);
+          resolve(false);
+        }, timeoutMs);
+        waiting.set(id, (allow) => {
+          clearTimeout(timer);
+          resolve(allow);
+        });
+      });
+    },
+    close() {
+      process.stdin.destroy();
+    },
+  };
+}
+
+// Long strings (file contents) are cut before they travel to the HUD.
+function trimInput(input) {
+  const out = {};
+  for (const [key, value] of Object.entries(input || {})) {
+    out[key] =
+      typeof value === "string" && value.length > 2000
+        ? `${value.slice(0, 2000)}… [${value.length} caracteres]`
+        : value;
   }
-  return data;
+  return out;
+}
+
+function makeCanUseTool(request, channel) {
+  return async (toolName, input, context) => {
+    if (permissionPolicy(request.permission, toolName, input, request.workspace) === "allow") {
+      return { behavior: "allow", updatedInput: input };
+    }
+    if (!request.interactive) {
+      return {
+        behavior: "deny",
+        message: "Sem canal de aprovação nesta execução; a ação foi negada.",
+      };
+    }
+    const id = randomUUID().replace(/-/g, "").slice(0, 12);
+    emitEvent({
+      type: "permission_request",
+      id,
+      tool: toolName,
+      input: trimInput(input),
+      reason: context?.decisionReason || "",
+      blocked_path: context?.blockedPath || "",
+    });
+    const allowed = await channel.decision(id, PERMISSION_WAIT_MS);
+    return allowed
+      ? { behavior: "allow", updatedInput: input }
+      : { behavior: "deny", message: "O usuário negou esta ação (ou não respondeu a tempo)." };
+  };
 }
 
 function serializeContent(content) {
@@ -81,11 +189,17 @@ function serializeContent(content) {
 
 // Tool policy. `allowedTools` in the SDK only PRE-APPROVES tools; it does not
 // limit which ones exist. Availability is set with `tools` / `disallowedTools`.
-// The default agent is read-only: it can read, search and browse, but cannot
-// run commands or change files, whatever the user's own Claude Code settings
-// (allow rules, defaultMode) say. Writing/shell needs an explicit opt-in
-// (`allowed_tools`, e.g. via OPENJARVIS_CLAUDE_AGENT_TOOLS).
+//
+// Three agent permission modes (request.permission):
+//   read - read, search and browse only; nothing else exists. (default)
+//   ask  - may also edit files and run commands, but EVERY such action is sent
+//          to the user for approval first.
+//   free - edits and commands inside the project folder run without asking,
+//          unless risky; anything outside it, or risky, still asks.
+// In all modes reading/searching is pre-approved and the host (HUD) is the
+// only one who can answer a question, so without a channel "ask" means "deny".
 const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "WebSearch", "WebFetch"];
+const WRITE_TOOLS = ["Edit", "Write", "NotebookEdit", "Bash"];
 const BLOCKED_TOOLS = [
   "Bash",
   "BashOutput",
@@ -95,15 +209,26 @@ const BLOCKED_TOOLS = [
   "NotebookEdit",
   "Task",
 ];
+// How long to wait for the user before denying (the host denies a bit earlier).
+const PERMISSION_WAIT_MS = 200000;
+const FILE_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
 function toolOptions(request) {
-  // "dontAsk": whatever is not pre-approved is denied instead of prompting
-  // (there is nobody to answer a prompt in this headless runner).
   const base = { permissionMode: "dontAsk" };
   if (request.mode === "chat") return { ...base, tools: [] };
   const explicit = (request.allowed_tools || []).filter(Boolean);
   if (explicit.length) {
     return { ...base, tools: explicit, allowedTools: explicit };
+  }
+  const permission = request.permission || "read";
+  if (permission === "ask" || permission === "free") {
+    // Reads are pre-approved; everything else reaches canUseTool.
+    return {
+      permissionMode: "default",
+      tools: [...READ_ONLY_TOOLS, ...WRITE_TOOLS],
+      allowedTools: READ_ONLY_TOOLS,
+      disallowedTools: ["BashOutput", "KillShell", "Task"],
+    };
   }
   return {
     ...base,
@@ -113,13 +238,85 @@ function toolOptions(request) {
   };
 }
 
+function isInside(workspace, target) {
+  if (!workspace || !target) return false;
+  const win = process.platform === "win32";
+  const norm = (value) => {
+    const resolved = path.resolve(workspace, value);
+    return win ? resolved.toLowerCase() : resolved;
+  };
+  const rel = path.relative(norm(workspace), norm(target));
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+// Files that deserve a question even inside the project.
+const SENSITIVE_PATH =
+  /(^|[\/])(\.git|\.claude|\.ssh|\.aws|\.gnupg)([\/]|$)|(^|[\/])(\.env[^\/]*|\.npmrc|\.pypirc|id_rsa[^\/]*|credentials[^\/]*|[^\/]*\.(pem|key|pfx))$/i;
+
+// Shell commands that always ask in "free" mode: deleting, installing,
+// publishing, networking, privilege/process/registry control, inline code and
+// anything that pipes into a shell. Best effort, NOT a sandbox.
+const RISKY_SHELL = [
+  /\b(rm|rmdir|del|erase|rd|mv|move|ren|rename|cp -r|xcopy|robocopy)\b/i,
+  /\b(format|mkfs|dd|diskpart|fdisk)\b/i,
+  /\bRemove-Item\b|\bSet-Content\b|\bOut-File\b|\bNew-Item\b|\bMove-Item\b/i,
+  /\bgit\s+(push|reset|clean|rebase|checkout\s+--|branch\s+-D|stash\s+(drop|clear)|remote|config|filter-branch|update-ref)\b/i,
+  /\b(npm|pnpm|yarn|bun|pip|pip3|pipx|uv|poetry|cargo|go|gem|composer|winget|choco|scoop|apt|apt-get|brew|dotnet)\s+(install|add|remove|uninstall|publish|upgrade|update|tool|sync|pip|exec|dlx|x|i)\b/i,
+  /\b(npx|bunx|pnpx|uvx)\b/i,
+  /\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod|nc|ncat|ssh|scp|ftp|telnet)\b/i,
+  /\b(sudo|su|runas|shutdown|reboot|restart-computer|taskkill|kill|pkill|killall|reg|regedit|schtasks|sc|net|netsh|setx|chmod|chown|icacls|takeown|attrib)\b/i,
+  /\b(eval|exec|source|start-process|invoke-expression|iex)\b/i,
+  /\b(python[0-9.]*|py|node|deno|perl|ruby|php|powershell|pwsh|cmd|bash|sh|zsh)\b\s+(-c|-e|-command|-encodedcommand|\/c)\b/i,
+  /\|\s*(sh|bash|zsh|pwsh|powershell|cmd|python[0-9.]*|node)\b/i,
+  /\$\(|`/,
+  />>?\s*(?!\/dev\/null|nul\b|\$null|&)\S/i,
+  /(^|[\s"'=])\.\.([\/]|$)/,
+];
+
+function absolutePathTokens(command) {
+  const tokens = command.split(/[\s"'`|&;<>()]+/).filter(Boolean);
+  const found = [];
+  for (let token of tokens) {
+    token = token.replace(/^--?[\w-]+=/, "");
+    if (!token || /^[a-z][a-z0-9+.-]*:\/\//i.test(token)) continue; // URLs
+    if (token === "/dev/null" || /^nul$/i.test(token)) continue;
+    const drive = /^\/([a-zA-Z])\/(.*)$/.exec(token); // git-bash: /c/Users/...
+    if (drive) token = `${drive[1].toUpperCase()}:/${drive[2]}`;
+    if (/^([a-zA-Z]:[\/]|\\|\/|~[\/]?|%[A-Za-z_]+%|\$[A-Za-z_{]|\$HOME|\$env:)/.test(token)) {
+      found.push(token);
+    }
+  }
+  return found;
+}
+
+// "allow" runs without asking; "ask" needs the user's approval.
+function permissionPolicy(permission, toolName, input, workspace) {
+  if (permission !== "free") return "ask";
+  if (FILE_TOOLS.has(toolName)) {
+    const target = input?.file_path || input?.notebook_path || "";
+    if (!target || !isInside(workspace, target)) return "ask";
+    return SENSITIVE_PATH.test(target) ? "ask" : "allow";
+  }
+  if (toolName === "Bash") {
+    const command = String(input?.command || "");
+    if (!command.trim() || RISKY_SHELL.some((re) => re.test(command))) return "ask";
+    for (const token of absolutePathTokens(command)) {
+      if (/^(~|%|\$)/.test(token) || !isInside(workspace, token)) return "ask";
+    }
+    return SENSITIVE_PATH.test(command) ? "ask" : "allow";
+  }
+  return "ask";
+}
+
 async function main() {
+  const channel = openStdin();
   let request;
   try {
-    request = JSON.parse(await readStdin());
+    request = JSON.parse(await channel.request);
   } catch (error) {
     emitError(`Failed to parse input: ${error}`);
     process.exitCode = 1;
+    channel.close();
     return;
   }
 
@@ -146,12 +343,20 @@ async function main() {
     options.systemPrompt = request.system_prompt;
   }
   Object.assign(options, toolOptions(request));
+  if (options.permissionMode === "default") {
+    options.canUseTool = makeCanUseTool(request, channel);
+  }
   if (request.session_id) {
     options.sessionId = request.session_id;
   }
   if (request.model) {
     // Claude model chosen in the HUD ("sonnet", "opus", "haiku" or a full id).
     options.model = request.model;
+  }
+  if (options.permissionMode === "default") {
+    // A user-level `allow` rule would let tools run without ever reaching
+    // canUseTool, so the questions could be skipped. Ignore user settings here.
+    options.settingSources = [];
   }
   if (request.mode === "chat") {
     // Conversation mode: no tools, no user settings and a short system prompt.
@@ -279,6 +484,8 @@ async function main() {
     const message = error instanceof Error ? error.message : String(error);
     emitError(`Claude Agent SDK error: ${message}`);
     process.exitCode = 1;
+  } finally {
+    channel.close();
   }
 }
 

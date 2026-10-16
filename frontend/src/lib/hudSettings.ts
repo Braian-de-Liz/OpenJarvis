@@ -20,6 +20,8 @@ export interface HudSettings {
   claudeModel: string;
   /** Model Claude Code reported for the last answer (shown in the HUD). */
   claudeModelInUse: string;
+  /** What the Claude Code agent may do: read / ask (default) / free. */
+  claudeAgentMode: 'read' | 'ask' | 'free';
 }
 
 export const HUD_SETTINGS_KEY = 'openjarvis-hud-settings';
@@ -34,6 +36,7 @@ export const HUD_DEFAULTS: HudSettings = {
   speakNotifications: true,
   claudeModel: '',
   claudeModelInUse: '',
+  claudeAgentMode: 'ask',
 };
 
 export function loadHudSettings(): HudSettings {

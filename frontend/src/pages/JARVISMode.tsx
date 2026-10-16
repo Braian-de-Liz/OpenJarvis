@@ -6,7 +6,7 @@ import { useVoiceEvents } from '../lib/useVoiceEvents';
 import { apiFetch, checkHealth, fetchModels } from '../lib/api';
 import { sendChatTurn } from '../lib/chatTurn';
 import { useHudSettings } from '../lib/hudSettings';
-import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, CLAUDE_MODEL_OPTIONS, claudeModeOf, claudeModelFor, claudeModelLabel, isClaudeCode, localModels, pickLocalModel, rememberLocalModel, sourceOf, unusualClaudeUsage } from '../lib/aiSource';
+import { CLAUDE_CODE_AGENT_MODEL, CLAUDE_CODE_MODEL, AGENT_PERMISSION_OPTIONS, CLAUDE_MODEL_OPTIONS, agentPermissionLabel, claudeModeOf, claudeModelFor, claudeModelLabel, isClaudeCode, localModels, pickLocalModel, rememberLocalModel, sourceOf, unusualClaudeUsage } from '../lib/aiSource';
 import { useApprovalsStore } from '../lib/approvalsStore';
 import { toSpeakable } from '../lib/speakable';
 import { HudApprovals } from '../components/Jarvis/HudApprovals';
@@ -590,7 +590,7 @@ export function JARVISMode() {
         }
       });
     refresh();
-    const id = setInterval(refresh, 10000);
+    const id = setInterval(refresh, 3000);
     return () => clearInterval(id);
   }, [loadApprovals]);
 
@@ -883,7 +883,7 @@ export function JARVISMode() {
               {!selectedModel
                 ? 'NENHUM'
                 : isClaudeCode(selectedModel)
-                  ? `CLAUDE ${claudeModeOf(selectedModel) === 'agent' ? 'AGENTE' : 'CONVERSA'} · ${claudeModelLabel(hud.claudeModelInUse, hud.claudeModel)}`
+                  ? `CLAUDE ${claudeModeOf(selectedModel) === 'agent' ? `AGENTE · ${agentPermissionLabel(hud.claudeAgentMode)}` : 'CONVERSA'} · ${claudeModelLabel(hud.claudeModelInUse, hud.claudeModel)}`
                   : selectedModel}
             </span>
           </button>
@@ -1340,9 +1340,38 @@ function HUDSettingsDrawer({ onClose }: { onClose: () => void }) {
                 </div>
                 <span className="jarvis-field-hint">
                   {claudeMode === 'agent'
-                    ? 'Agente (somente leitura): lê arquivos, busca no projeto e na web, mas não edita nem roda comandos. Gasta bem mais do limite — cerca de 22 mil tokens por mensagem.'
+                    ? 'Agente: usa as ferramentas do Claude Code. Gasta bem mais do limite — cerca de 22 mil tokens por mensagem.'
                     : 'Conversa: leve e rápida, sem ferramentas — cerca de 400 tokens por mensagem.'}
                 </span>
+                {claudeMode === 'agent' && (
+                  <>
+                    <div className="flex gap-2 mt-2" role="radiogroup" aria-label="Permissões do agente">
+                      {AGENT_PERMISSION_OPTIONS.map((o) => (
+                        <button
+                          key={o.value}
+                          type="button"
+                          role="radio"
+                          aria-checked={hud.claudeAgentMode === o.value}
+                          disabled={isStreaming}
+                          onClick={() => updateHud({ claudeAgentMode: o.value })}
+                          className={`jarvis-pill flex-1 justify-center ${
+                            hud.claudeAgentMode === o.value
+                              ? o.value === 'free'
+                                ? 'border-amber-400/70 text-amber-200'
+                                : 'border-cyan-400/60 text-cyan-200'
+                              : 'text-zinc-400'
+                          }`}
+                          title={o.hint}
+                        >
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                    <span className="jarvis-field-hint">
+                      {AGENT_PERMISSION_OPTIONS.find((o) => o.value === hud.claudeAgentMode)?.hint}
+                    </span>
+                  </>
+                )}
                 <label className="jarvis-field mt-3">
                   Modelo do Claude
                   <select
