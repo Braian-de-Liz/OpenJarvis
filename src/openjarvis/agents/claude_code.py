@@ -584,6 +584,32 @@ class ClaudeCodeAgent(BaseAgent):
         except (OSError, ValueError):
             pass  # the runner is gone; it denies on EOF anyway
 
+    def _log_context_debug(self, event: dict[str, Any]) -> None:
+        """Log what the Claude Code session loaded (names and counts only)."""
+
+        def _names(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            return [str(item)[:80] for item in value[:50]]
+
+        servers = event.get("mcp_servers")
+        mcp = [
+            f"{str(s.get('name', ''))[:80]}({str(s.get('status', ''))[:20]})"
+            for s in (servers if isinstance(servers, list) else [])[:50]
+            if isinstance(s, dict)
+        ]
+        logger.info(
+            "claude_code context (%s): model=%s tools=%s mcp_servers=%s "
+            "plugins=%s skills=%s slash_commands=%s",
+            self._mode,
+            str(event.get("model", ""))[:80],
+            _names(event.get("tools")),
+            mcp,
+            _names(event.get("plugins")),
+            event.get("skills", 0),
+            event.get("slash_commands", 0),
+        )
+
     def _publish_runner_event(
         self,
         raw: str,
@@ -599,6 +625,10 @@ class ClaudeCodeAgent(BaseAgent):
         if kind == "permission_request":
             if on_permission is not None:
                 on_permission(event)
+        elif kind == "context_debug":
+            # Only emitted when OPENJARVIS_CLAUDE_DEBUG_CONTEXT=1. Log-only:
+            # what Claude Code loaded for this session (names and counts).
+            self._log_context_debug(event)
         elif kind == "model":
             self._bus.publish(
                 EventType.AGENT_MODEL_INFO,

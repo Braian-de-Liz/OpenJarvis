@@ -143,3 +143,21 @@ async def test_multi_routes_stream_full_by_model():
         result_b.append(chunk)
 
     assert result_b[0].content == "from B"
+
+
+def test_multi_first_engine_keeps_shared_model():
+    """A later engine advertising the same model must not steal it.
+
+    LiteLLM advertises the configured default model ("qwen2.5:7b"); when it
+    won the map, local Ollama requests failed with "LLM Provider NOT provided".
+    """
+    primary = _FakeStreamFullEngine([])
+    primary.list_models = lambda: ["qwen2.5:7b"]
+    fallback = _FakeStreamFullEngine([])
+    fallback.list_models = lambda: ["qwen2.5:7b"]
+
+    multi = MultiEngine([("ollama", primary), ("litellm", fallback)])
+
+    assert multi.engine_key_for("qwen2.5:7b") == "ollama"
+    assert multi._engine_for("qwen2.5:7b") is primary
+    assert multi.list_models() == ["qwen2.5:7b"]

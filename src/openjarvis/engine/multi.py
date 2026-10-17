@@ -32,9 +32,15 @@ class MultiEngine(InferenceEngine):
     def _refresh_map(self) -> None:
         self._model_map.clear()
         self._model_key_map.clear()
+        # First engine to advertise a model owns it: callers list the primary
+        # engine first. LiteLLM advertises the configured default model (it
+        # cannot enumerate providers), so last-wins let it steal a local model
+        # like "qwen2.5:7b" from Ollama and fail without a provider prefix.
         for key, engine in self._engines:
             try:
                 for model_id in engine.list_models():
+                    if model_id in self._model_map:
+                        continue
                     self._model_map[model_id] = engine
                     self._model_key_map[model_id] = key
             except Exception as exc:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 import tempfile
 from typing import List, Optional
 
@@ -21,6 +22,39 @@ except ImportError:
     ctranslate2 = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+_CUDA_PRELOADED = False
+
+
+def _preload_cuda_libs() -> None:
+    """Load cuBLAS from the ``nvidia-cublas-cu12`` wheel on Windows.
+
+    CTranslate2 ships cuDNN but not cuBLAS, and it loads ``cublas64_12.dll``
+    by name, so Windows never looks inside ``site-packages/nvidia``
+    (``os.add_dll_directory`` does not help either). Loading the DLLs by full
+    path first makes the later by-name lookup hit the module already in
+    memory. Best effort: without the wheel, the CPU fallback still applies.
+    """
+    global _CUDA_PRELOADED
+    if _CUDA_PRELOADED or sys.platform != "win32":
+        return
+    _CUDA_PRELOADED = True
+    import ctypes
+    import site
+
+    for root in site.getsitepackages():
+        bin_dir = os.path.join(root, "nvidia", "cublas", "bin")
+        if not os.path.isdir(bin_dir):
+            continue
+        # cublas64_12 depends on cublasLt64_12, so load that first.
+        for name in ("cublasLt64_12.dll", "cublas64_12.dll"):
+            path = os.path.join(bin_dir, name)
+            if os.path.isfile(path):
+                try:
+                    ctypes.WinDLL(path)
+                except OSError as exc:
+                    logger.debug("Could not preload %s: %s", path, exc)
+        return
 
 
 @SpeechRegistry.register("faster-whisper")
@@ -93,6 +127,8 @@ class FasterWhisperBackend(SpeechBackend):
                     "Install with: uv sync --extra desktop"
                 )
                 raise ImportError(self._last_error)
+            if self._device != "cpu":
+                _preload_cuda_libs()
             compute_type = self._resolve_compute_type()
             self._model = WhisperModel(
                 self._model_size,

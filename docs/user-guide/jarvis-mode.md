@@ -240,6 +240,6 @@ The route returns `503` if `psutil` is not installed.
 | Telemetry shows **DEMO** | Same as above, or the server predates the metrics route; restart `jarvis serve` |
 | Nothing happens after the claps | An old `jarvis show` (pre hands-free) is still running and waiting for Enter, or two instances are fighting over the mic. Close all of them and start one |
 | Claps not detected | Lower `--threshold` (calibrate with `test_clap.py`) or raise `--clap-window` |
-| STT crashes on first use with a CUDA/cuBLAS error | With `[speech].device = "auto"`, faster-whisper falls back to CPU automatically when the CUDA runtime DLLs are missing. Set `device = "cpu"` or `"cuda"` to force a choice |
+| STT crashes on first use with a CUDA/cuBLAS error, or the log says "GPU inference failed … using CPU" | CTranslate2 ships cuDNN but not cuBLAS. Install it with `uv pip install nvidia-cublas-cu12`; on Windows OpenJarvis preloads it from `site-packages/nvidia/cublas/bin`. Without it, `device = "auto"` falls back to CPU. On an 8 GB GPU shared with a 7B Ollama model, `model = "large-v3-turbo"` with `compute_type = "int8_float16"` fits (about 1.2 GB) |
 | Jarvis hears but never answers | Check `uv run jarvis doctor`: Ollama must be running with the model pulled. Also try a shorter `[agent].tools` list |
 | Session ends while you are still talking | Raise `--idle-timeout` or set `--silence-threshold` lower than the auto-calibrated value |

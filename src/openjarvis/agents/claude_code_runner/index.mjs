@@ -6,8 +6,9 @@
  */
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { fileURLToPath } from "node:url";
 
 const OUTPUT_START = "---OPENJARVIS_OUTPUT_START---";
 const OUTPUT_END = "---OPENJARVIS_OUTPUT_END---";
@@ -40,7 +41,7 @@ const PARENT_SESSION_PREFIXES = [
   "CLAUDE_CODE_SSE_PORT",
 ];
 
-function scrubbedEnv(source) {
+export function scrubbedEnv(source) {
   const env = {};
   for (const [key, value] of Object.entries(source)) {
     if (key.startsWith("ANTHROPIC_")) continue;
@@ -213,7 +214,7 @@ const BLOCKED_TOOLS = [
 const PERMISSION_WAIT_MS = 200000;
 const FILE_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
 
-function toolOptions(request) {
+export function toolOptions(request) {
   const base = { permissionMode: "dontAsk" };
   if (request.mode === "chat") return { ...base, tools: [] };
   const explicit = (request.allowed_tools || []).filter(Boolean);
@@ -308,26 +309,34 @@ function permissionPolicy(permission, toolName, input, workspace) {
   return "ask";
 }
 
-async function main() {
-  const channel = openStdin();
-  let request;
-  try {
-    request = JSON.parse(await channel.request);
-  } catch (error) {
-    emitError(`Failed to parse input: ${error}`);
-    process.exitCode = 1;
-    channel.close();
-    return;
-  }
+// Conversation mode runs from a dedicated, empty folder next to the runner
+// (``~/.openjarvis/claude_chat_workspace``) so no project files, CLAUDE.md or
+// per-folder auto-memory can be picked up from wherever the server started.
+export function defaultChatWorkspace() {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(here, "..", "claude_chat_workspace");
+}
 
-  // Subscription only: never bill an API key. The SDK then authenticates with
-  // the local Claude Code login (claude.ai account), so usage counts against
-  // the Claude Code plan limit. request.api_key is intentionally ignored.
-  const env = scrubbedEnv(process.env);
-  for (const key of Object.keys(process.env)) {
-    if (!(key in env)) delete process.env[key];
-  }
+// Everything `settingSources: []` and `tools: []` do NOT switch off. Per the
+// Agent SDK docs, the Claude Code process still reads ~/.claude.json (user
+// MCP servers), loads the claude.ai MCP connectors of the logged-in account
+// and injects auto-memory into the system prompt. Each of those adds its own
+// tokens to every conversation message, so chat mode turns them all off:
+//   strictMcpConfig            only use the servers in `mcpServers` ({}), ignoring
+//                              user settings, plugin MCPs and claude.ai connectors
+//                              (`mcpServers: {}` alone does NOT do this)
+//   ENABLE_CLAUDEAI_MCP_SERVERS=false   belt and braces for the connectors
+//   CLAUDE_CODE_DISABLE_AUTO_MEMORY=1   no MEMORY.md in the system prompt
+export const CHAT_ISOLATION_ENV = {
+  ENABLE_CLAUDEAI_MCP_SERVERS: "false",
+  CLAUDE_CODE_DISABLE_AUTO_MEMORY: "1",
+};
 
+// Pure: builds the `query()` options for a request. ``sourceEnv`` is the raw
+// process environment; credentials are scrubbed here so every path goes
+// through the same filter. ``canUseTool`` is attached by the caller.
+export function buildQueryOptions(request, sourceEnv, { chatWorkspace } = {}) {
+  const env = scrubbedEnv(sourceEnv);
   const options = {
     maxTurns: 30,
     includePartialMessages: true,
@@ -343,9 +352,6 @@ async function main() {
     options.systemPrompt = request.system_prompt;
   }
   Object.assign(options, toolOptions(request));
-  if (options.permissionMode === "default") {
-    options.canUseTool = makeCanUseTool(request, channel);
-  }
   if (request.session_id) {
     options.sessionId = request.session_id;
   }
@@ -359,14 +365,87 @@ async function main() {
     options.settingSources = [];
   }
   if (request.mode === "chat") {
-    // Conversation mode: no tools, no user settings and a short system prompt.
-    // This cuts the fixed per-message context from ~22k tokens to a few hundred.
+    // Conversation mode: no tools, no user settings, no MCP servers (own or
+    // claude.ai connectors), no auto-memory, a neutral folder and a short
+    // system prompt. Only the system prompt and the message reach the model.
     options.settingSources = [];
     options.maxTurns = 2;
+    options.strictMcpConfig = true;
+    options.mcpServers = {};
+    options.env = { ...env, ...CHAT_ISOLATION_ENV };
+    options.cwd = chatWorkspace || defaultChatWorkspace();
     if (!options.systemPrompt) {
       options.systemPrompt = "Responda de forma curta e direta.";
     }
   }
+  return options;
+}
+
+// Opt-in diagnostics (OPENJARVIS_CLAUDE_DEBUG_CONTEXT=1): what the SDK's init
+// message says was loaded for this session. Names and counts only; paths,
+// env, args and URLs of MCP servers or plugins are never copied.
+const DEBUG_LIST_LIMIT = 50;
+
+function names(list, pick) {
+  if (!Array.isArray(list)) return [];
+  return list
+    .map((item) => String(typeof item === "string" ? item : (item && pick(item)) || ""))
+    .filter(Boolean)
+    .slice(0, DEBUG_LIST_LIMIT);
+}
+
+export function summarizeInit(message) {
+  const mcp = Array.isArray(message.mcp_servers) ? message.mcp_servers : [];
+  return {
+    type: "context_debug",
+    model: String(message.model || ""),
+    tools: names(message.tools, (t) => t.name),
+    mcp_servers: mcp.slice(0, DEBUG_LIST_LIMIT).map((s) => ({
+      name: String((s && s.name) || ""),
+      status: String((s && s.status) || ""),
+    })),
+    plugins: names(message.plugins, (p) => p.name),
+    skills: Array.isArray(message.skills) ? message.skills.length : 0,
+    slash_commands: Array.isArray(message.slash_commands)
+      ? message.slash_commands.length
+      : 0,
+  };
+}
+
+async function main() {
+  const channel = openStdin();
+  let request;
+  try {
+    request = JSON.parse(await channel.request);
+  } catch (error) {
+    emitError(`Failed to parse input: ${error}`);
+    process.exitCode = 1;
+    channel.close();
+    return;
+  }
+
+  // Subscription only: never bill an API key. The SDK then authenticates with
+  // the local Claude Code login (claude.ai account), so usage counts against
+  // the Claude Code plan limit. request.api_key is intentionally ignored.
+  const debugContext = process.env.OPENJARVIS_CLAUDE_DEBUG_CONTEXT === "1";
+  const options = buildQueryOptions(request, process.env);
+  for (const key of Object.keys(process.env)) {
+    if (!(key in options.env)) delete process.env[key];
+  }
+  if (options.permissionMode === "default") {
+    options.canUseTool = makeCanUseTool(request, channel);
+  }
+  if (request.mode === "chat") {
+    try {
+      fs.mkdirSync(options.cwd, { recursive: true });
+    } catch {
+      // the SDK reports a missing folder itself
+    }
+  }
+
+  // Loaded here, not at the top, so the pure helpers above can be imported
+  // (and unit-tested) without the SDK being installed.
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   let content = "";
   let messageCount = 0;
@@ -392,6 +471,7 @@ async function main() {
           modelInUse = message.model;
           emitEvent({ type: "model", model: message.model });
         }
+        if (debugContext) emitEvent(summarizeInit(message));
       } else if (message.type === "stream_event" && !message.parent_tool_use_id) {
         const delta = message.event?.delta;
         if (
@@ -489,4 +569,7 @@ async function main() {
   }
 }
 
-await main();
+// Tests import this file for the pure helpers and set this to skip the run.
+if (process.env.OPENJARVIS_RUNNER_NO_MAIN !== "1") {
+  await main();
+}

@@ -50,20 +50,13 @@ _IMPORT_LOCK = threading.RLock()
 def _patch_portuguese_espeak() -> None:
     """Make Kokoro's Portuguese voices work with stock espeak-ng.
 
-    Kokoro maps ``p`` to ``pt-br``, but espeak-ng only ships ``pt``; and
     ``espeakng_loader`` bundles data without the Portuguese dictionary, so
-    point phonemizer at a system espeak-ng install when one exists.
+    point phonemizer at a system espeak-ng install when one exists. Kokoro
+    maps ``p`` to ``pt-br``; keep that whenever the data ships the Brazilian
+    voice, because espeak-ng's ``pt`` is European Portuguese (``senhor`` →
+    ``sɨɲˈoɹ``) and sounds wrong with the Brazilian ``pf_``/``pm_`` voices.
     Best effort: any failure leaves Kokoro's defaults in place.
     """
-    try:
-        from kokoro import pipeline as kokoro_pipeline
-
-        lang_codes = getattr(kokoro_pipeline, "LANG_CODES", None)
-        if isinstance(lang_codes, dict):
-            lang_codes["p"] = "pt"
-    except Exception:
-        pass
-
     import os
 
     candidates = [
@@ -76,6 +69,16 @@ def _patch_portuguese_espeak() -> None:
     data_path = next((p for p in candidates if p and os.path.isdir(p)), None)
     if data_path is None:
         return
+
+    if not os.path.isfile(os.path.join(data_path, "lang", "roa", "pt-BR")):
+        try:
+            from kokoro import pipeline as kokoro_pipeline
+
+            lang_codes = getattr(kokoro_pipeline, "LANG_CODES", None)
+            if isinstance(lang_codes, dict):
+                lang_codes["p"] = "pt"
+        except Exception:
+            pass
     try:
         import espeakng_loader
         import phonemizer.backend.espeak.espeak as espeak

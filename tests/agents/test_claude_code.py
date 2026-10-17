@@ -475,6 +475,82 @@ class TestClaudeCodeEvents:
         assert EventType.AGENT_TURN_END in types
 
 
+class TestContextDebugEvent:
+    """``context_debug`` (OPENJARVIS_CLAUDE_DEBUG_CONTEXT=1) is log-only."""
+
+    @staticmethod
+    def _agent(bus):
+        engine = MagicMock()
+        engine.engine_id = "mock"
+        return ClaudeCodeAgent(engine, "claude-code", bus=bus)
+
+    def test_logs_names_and_counts_without_publishing(self, caplog):
+        bus = EventBus(record_history=True)
+        agent = self._agent(bus)
+        event = {
+            "type": "context_debug",
+            "model": "claude-sonnet",
+            "tools": [],
+            "mcp_servers": [{"name": "meu-mcp", "status": "connected"}],
+            "plugins": ["humanizer"],
+            "skills": 4,
+            "slash_commands": 9,
+        }
+
+        with caplog.at_level("INFO", logger="openjarvis.agents.claude_code"):
+            agent._publish_runner_event(
+                json.dumps(event), {}, on_permission=lambda e: None
+            )
+
+        text = caplog.text
+        assert "claude_code context (chat)" in text
+        assert "meu-mcp(connected)" in text
+        assert "humanizer" in text
+        assert "skills=4" in text
+        assert bus.history == []  # never reaches the EventBus / SSE
+
+    def test_only_known_fields_are_logged(self, caplog):
+        agent = self._agent(EventBus(record_history=True))
+        event = {
+            "type": "context_debug",
+            "mcp_servers": [{"name": "x", "status": "ok", "env": {"T": "SECRET"}}],
+            "api_key": "SECRET",
+        }
+
+        with caplog.at_level("INFO", logger="openjarvis.agents.claude_code"):
+            agent._publish_runner_event(json.dumps(event), {})
+
+        assert "SECRET" not in caplog.text
+
+    def test_malformed_payload_does_not_raise(self):
+        agent = self._agent(EventBus(record_history=True))
+        event = {"type": "context_debug", "tools": "nope", "mcp_servers": 3}
+
+        agent._publish_runner_event(json.dumps(event), {})  # no exception
+
+
+class TestRunnerNodeTests:
+    """Run the runner's own ``node --test`` suite (no SDK, no plan usage)."""
+
+    def test_runner_helpers_pass_node_tests(self):
+        import shutil
+        from pathlib import Path
+
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("Node.js is not installed")
+        script = Path(__file__).with_name("claude_code_runner.test.mjs")
+        result = subprocess.run(
+            [node, "--test", str(script)],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=60,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
 # ---------------------------------------------------------------------------
 # _parse_output unit tests
 # ---------------------------------------------------------------------------
